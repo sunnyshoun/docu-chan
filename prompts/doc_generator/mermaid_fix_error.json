@@ -1,0 +1,13 @@
+{
+    "name": "mermaid_fix_error",
+    "description": "Fix Mermaid syntax errors based on render error message and original structure",
+    "version": "1.2.0",
+    "system_prompt": "You are a Mermaid syntax debugger. Fix the broken code based on the error message. You have access to the ORIGINAL STRUCTURE for reference - use it to understand what the diagram should represent.",
+    "user_prompt_template": "Fix this broken Mermaid code.\n\n=== ORIGINAL STRUCTURE (for reference) ===\n{structure_logic}\n\n=== BROKEN CODE ===\n```mermaid\n{broken_code}\n```\n\n=== RENDER ERROR ===\n{error_message}\n\n=== CRITICAL: QUOTING RULES ===\n\n**ALL text inside brackets MUST be wrapped in double quotes:**\n\n| Bracket Type | WRONG | CORRECT |\n|--------------|-------|--------|\n| `[ ]` Rectangle | `A[Label]` | `A[\"Label\"]` |\n| `{ }` Diamond | `B{Decision}` | `B{\"Decision\"}` |\n| `( )` Stadium | `C(Start)` | `C(\"Start\")` |\n| `[( )]` Cylinder | `D[(DB)]` | `D[(\"DB\")]` |\n| `[[ ]]` Subroutine | `E[[Sub]]` | `E[[\"Sub\"]]` |\n| `\\| \\|` Edge label | `A -->\\|Yes\\| B` | `A -->\\|\"Yes\"\\| B` |\n| `subgraph` | `subgraph id [Title]` | `subgraph id [\"Title\"]` |\n\n=== OTHER FIXES ===\n\n1. **Reserved words (end, graph, style, class)** → Add `_node` suffix\n2. **Special characters** → ASCII only, no Unicode, no `<br/>`\n3. **Arrows** → Use `-->` not `->`\n4. **Direction** → Use `flowchart TD` not `graph TD`\n\nOutput ONLY a ```mermaid code block.",
+    "parameters": {
+        "temperature": 0.1,
+        "max_tokens": 4096
+    },
+    "input_variables": ["structure_logic", "broken_code", "error_message"],
+    "output_format": "mermaid"
+}

@@ -53,7 +53,6 @@ def main():
         chart_loop = ChartLoop(
             log_dir=str(config.chart.log_dir),
             output_dir=str(config.chart.output_dir) if not args.output else args.output,
-            max_iterations=args.max_iterations,
             designer_model=config.models.diagram_designer,
             coder_model=config.models.mermaid_coder,
             evaluator_model=config.models.visual_inspector

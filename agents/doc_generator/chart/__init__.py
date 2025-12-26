@@ -20,5 +20,5 @@ __all__ = [
     "DiagramDesigner",
     "MermaidCoder",
     "CodeExecutor",
-    "ChartAF",
+    "ChartAF"
 ]

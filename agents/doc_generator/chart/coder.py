@@ -1,41 +1,30 @@
 """Mermaid Coder - 生成與修正 Mermaid 代碼"""
 import json
 import re
-from typing import Optional, List
+from typing import Optional
 
 from agents.base import BaseAgent, AgentResult
 from models import StructureLogic, MermaidCode, VisualFeedback
 
 
 class MermaidCoder(BaseAgent):
-    """Mermaid 代碼生成器：根據結構生成代碼，並根據反饋修正"""
+    """Mermaid 代碼生成器"""
     
     PROMPT_GENERATE = "doc_generator/mermaid_coder"
     PROMPT_REVISE = "doc_generator/mermaid_revise"
+    PROMPT_FIX_ERROR = "doc_generator/mermaid_fix_error"
     
-    def __init__(self, model: Optional[str] = None):
+    def __init__(self, model: Optional[str] = None, name: str = "MermaidCoder"):
         super().__init__(
-            name="MermaidCoder",
+            name=name,
             model=model or "gpt-oss:20b",
             use_thinking=True
         )
-        self._code_history: List[MermaidCode] = []
-    
-    def execute(self, structure: StructureLogic, feedback: Optional[VisualFeedback] = None, **kwargs) -> AgentResult:
-        """執行 Mermaid 代碼生成或修正"""
-        if feedback is not None and self._code_history:
-            # 有反饋且有歷史代碼，進行修正
-            previous_code = self._code_history[-1].code
-            return self.revise(structure, previous_code, feedback)
-        else:
-            # 生成新代碼
-            return self.generate(structure)
     
     def generate(self, structure: StructureLogic) -> AgentResult:
         """生成 Mermaid 代碼"""
         self._log(f"Generating Mermaid code for {structure.diagram_type}...")
         
-        response = None
         try:
             response = self._call_llm(
                 prompt_name=self.PROMPT_GENERATE,
@@ -46,57 +35,21 @@ class MermaidCoder(BaseAgent):
                 }
             )
             
-            # 優先嘗試從 markdown code block 提取（更穩健）
             code = self._extract_mermaid_code(response.content)
-            result_data = {}
-            
             if not code:
-                # 退回 JSON 解析
-                result_data = self._parse_json_response(response.content)
-                raw_code = result_data.get("mermaid_code", result_data.get("code", ""))
-                code = self._fix_newlines(raw_code)
-            else:
-                code = self._fix_newlines(code)
+                raise ValueError("Failed to extract Mermaid code")
             
-            mermaid_code = MermaidCode(
-                code=code,
-                diagram_type=structure.diagram_type,
-                version=len(self._code_history) + 1,
-                raw_data=result_data
+            return AgentResult(
+                success=True,
+                data=MermaidCode(code=code, diagram_type=structure.diagram_type, version=1)
             )
-            
-            if not mermaid_code.code.strip():
-                raise ValueError("Generated Mermaid code is empty")
-            
-            self._code_history.append(mermaid_code)
-            return AgentResult(success=True, data=mermaid_code, raw_response=response.content)
-            
-        except (json.JSONDecodeError, ValueError) as e:
-            # 最後嘗試從回應中提取代碼
-            if response and hasattr(response, 'content'):
-                code = self._extract_mermaid_code(response.content)
-                if code:
-                    mermaid_code = MermaidCode(
-                        code=code,
-                        diagram_type=structure.diagram_type,
-                        version=len(self._code_history) + 1
-                    )
-                    self._code_history.append(mermaid_code)
-                    return AgentResult(success=True, data=mermaid_code)
-            return AgentResult(success=False, data=None, error=f"Failed to parse response: {e}")
         except Exception as e:
-            return AgentResult(success=False, data=None, error=str(e))
+            return AgentResult(success=False, error=str(e))
     
-    def revise(
-        self,
-        structure: StructureLogic,
-        previous_code: str,
-        feedback: VisualFeedback
-    ) -> AgentResult:
-        """根據反饋修正代碼"""
+    def revise(self, structure: StructureLogic, previous_code: str, feedback: VisualFeedback) -> AgentResult:
+        """根據視覺反饋修正代碼"""
         self._log(f"Revising code based on feedback: {feedback.feedback_type.value}")
         
-        response = None
         try:
             response = self._call_llm(
                 prompt_name=self.PROMPT_REVISE,
@@ -109,92 +62,65 @@ class MermaidCoder(BaseAgent):
                 }
             )
             
-            # 優先嘗試從 markdown code block 提取（更穩健）
             code = self._extract_mermaid_code(response.content)
-            result_data = {}
-            
             if not code:
-                # 退回 JSON 解析
-                result_data = self._parse_json_response(response.content)
-                raw_code = result_data.get("mermaid_code", result_data.get("code", ""))
-                code = self._fix_newlines(raw_code)
-            else:
-                code = self._fix_newlines(code)
+                raise ValueError("Failed to extract revised code")
             
-            if not code or not code.strip():
-                raise ValueError("Revised Mermaid code is empty")
-            
-            mermaid_code = MermaidCode(
-                code=code,
-                diagram_type=structure.diagram_type,
-                version=len(self._code_history) + 1,
-                raw_data=result_data
+            return AgentResult(
+                success=True,
+                data=MermaidCode(code=code, diagram_type=structure.diagram_type, version=1)
             )
-            self._code_history.append(mermaid_code)
-            return AgentResult(success=True, data=mermaid_code)
-        except (json.JSONDecodeError, ValueError) as e:
-            # 最後嘗試從回應中提取代碼
-            if response and hasattr(response, 'content'):
-                code = self._extract_mermaid_code(response.content)
-                if code:
-                    mermaid_code = MermaidCode(
-                        code=code,
-                        diagram_type=structure.diagram_type,
-                        version=len(self._code_history) + 1
-                    )
-                    self._code_history.append(mermaid_code)
-                    return AgentResult(success=True, data=mermaid_code)
-            return AgentResult(success=False, data=None, error=f"Failed to revise: {e}")
+        except Exception as e:
+            return AgentResult(success=False, error=str(e))
+    
+    def fix_error(self, structure: StructureLogic, broken_code: str, error_message: str) -> AgentResult:
+        """修復渲染錯誤（使用原始結構作為參考）"""
+        self._log("Fixing render error...")
+        
+        try:
+            response = self._call_llm(
+                prompt_name=self.PROMPT_FIX_ERROR,
+                variables={
+                    "structure_logic": json.dumps(structure.to_dict(), ensure_ascii=False, indent=2),
+                    "broken_code": broken_code,
+                    "error_message": error_message
+                }
+            )
+            
+            code = self._extract_mermaid_code(response.content)
+            if not code:
+                raise ValueError("Failed to extract fixed code")
+            
+            if code.strip() == broken_code.strip():
+                raise ValueError("Fixed code is identical to broken code")
+            
+            return AgentResult(
+                success=True,
+                data=MermaidCode(code=code, diagram_type=structure.diagram_type, version=1)
+            )
+        except Exception as e:
+            return AgentResult(success=False, error=str(e))
     
     def _extract_mermaid_code(self, response: str) -> Optional[str]:
         """從回應中提取 Mermaid 代碼"""
-        # 1. 嘗試匹配 ```mermaid ... ```
-        mermaid_pattern = r'```mermaid\s*([\s\S]*?)\s*```'
-        matches = re.findall(mermaid_pattern, response)
-        if matches:
-            return self._fix_newlines(matches[0].strip())
+        # 嘗試匹配 ```mermaid ... ```
+        match = re.search(r'```mermaid\s*([\s\S]*?)\s*```', response)
+        if match:
+            return self._fix_newlines(match.group(1).strip())
         
-        # 2. 嘗試從 JSON 中提取 mermaid_code 欄位
-        try:
-            json_data = self._parse_json_response(response)
-            if isinstance(json_data, dict):
-                code = json_data.get("mermaid_code", json_data.get("code", ""))
-                if code and any(kw in code.lower() for kw in ['flowchart', 'graph', 'sequencediagram', 'erdiagram']):
-                    return self._fix_newlines(code)
-        except (json.JSONDecodeError, ValueError):
-            pass
+        # 嘗試匹配一般 ``` ... ```
+        match = re.search(r'```\s*([\s\S]*?)\s*```', response)
+        if match:
+            code = match.group(1).strip()
+            if any(kw in code.lower() for kw in ['flowchart', 'graph', 'sequence', 'erdiagram']):
+                return self._fix_newlines(code)
         
-        # 3. 嘗試匹配一般代碼塊
-        code_pattern = r'```\s*([\s\S]*?)\s*```'
-        matches = re.findall(code_pattern, response)
-        for match in matches:
-            if any(kw in match.lower() for kw in ['flowchart', 'graph', 'sequencediagram']):
-                return self._fix_newlines(match.strip())
         return None
     
     def _fix_newlines(self, code: str) -> str:
-        """
-        修正 LLM 回傳的換行符號
-        
-        LLM 在 JSON 中可能回傳:
-        - "\\n" -> 解析後變成字面 "\n" 兩字元 (錯誤)
-        - "\n" -> 解析後變成真正換行 (正確)
-        
-        此方法將字面的 "\n" 轉換為真正的換行符
-        """
-        # 將字面的 \n (兩個字元) 轉換為真正的換行
-        # 注意: 需要處理 \r\n 和 \n 兩種情況
-        code = code.replace('\\\\', '\\')  # \\ -> \
-        code = code.replace('\\r\\n', '\n')  # Windows 換行
-        code = code.replace('\\n', '\n')      # Unix 換行
-        code = code.replace('\\t', '    ')    # Tab 轉空格
-        code = code.replace('\\"', '\"')    # 引號轉換
+        """修正 LLM 回傳的換行符號"""
+        code = code.replace('\\r\\n', '\n')
+        code = code.replace('\\n', '\n')
+        code = code.replace('\\t', '    ')
+        code = code.replace('\\"', '"')
         return code
-    
-    @property
-    def code_history(self) -> List[MermaidCode]:
-        return self._code_history.copy()
-    
-    def clear_history(self):
-        """清除代碼歷史"""
-        self._code_history.clear()
