@@ -1,0 +1,13 @@
+{
+    "name": "image_reader",
+    "description": "Read and describe images",
+    "version": "1.0.0",
+    "system_prompt": "You are an image analysis expert. Describe images in detail for documentation purposes.",
+    "user_prompt_template": "Describe the provided image in detail. Focus on:\n1. Type of image (UI, diagram, screenshot, etc.)\n2. Key elements visible\n3. Overall purpose\n\nProvide a JSON response.",
+    "parameters": {
+        "temperature": 0.3,
+        "max_tokens": 2048
+    },
+    "input_variables": [],
+    "output_format": "json"
+}

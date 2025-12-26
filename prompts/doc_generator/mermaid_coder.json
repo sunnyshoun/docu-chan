@@ -1,0 +1,13 @@
+﻿{
+    "name": "mermaid_coder",
+    "description": "Generate Mermaid syntax code from structure logic",
+    "version": "1.1.0",
+    "system_prompt": "You are a Mermaid diagram coder. Output valid Mermaid code with CORRECT top-to-bottom layout. The START node must appear FIRST in the code.",
+    "user_prompt_template": "Convert this structure to Mermaid code:\n\n{structure_logic}\n\nType: {diagram_type} | Direction: {direction}\n\n=== CRITICAL LAYOUT RULES ===\n\n1. **NODE ORDER DETERMINES LAYOUT** - Mermaid renders nodes in definition order!\n   - Define START node FIRST (it will appear at TOP)\n   - Define nodes in logical flow order (top to bottom)\n   - Define END node LAST (it will appear at BOTTOM)\n\n2. **EDGE ORDER MATTERS** - Define main flow edges FIRST, then branches\n\n3. **DO NOT use subgraphs for simple flows** - They often break the layout\n\n4. Wrap labels in quotes: A[\"Label\"]\n5. Wrap edge labels: A -->|\"Yes\"| B\n6. Avoid reserved words as IDs (end, graph, style) - use _node suffix\n7. Use ASCII only\n8. classDef: NEVER use 'end' as class name - use 'endNode'\n\n=== CORRECT STRUCTURE TEMPLATE ===\n\n```mermaid\nflowchart TD\n    %% 1. Define nodes in TOP-TO-BOTTOM order\n    start_node([\"Start\"])\n    step1[\"Step 1\"]\n    decision1{\"Decision?\"}\n    step2a[\"Option A\"]\n    step2b[\"Option B\"]\n    end_node([\"End\"])\n    \n    %% 2. Define MAIN FLOW edges first\n    start_node --> step1\n    step1 --> decision1\n    \n    %% 3. Define BRANCH edges\n    decision1 -->|\"Yes\"| step2a\n    decision1 -->|\"No\"| step2b\n    \n    %% 4. Connect to END\n    step2a --> end_node\n    step2b --> end_node\n    \n    %% 5. Styles LAST\n    classDef startNode fill:#90EE90\n    classDef endNode fill:#FFB6C1\n    classDef decision fill:#FFD700\n    class start_node startNode\n    class end_node endNode\n    class decision1 decision\n```\n\nOutput ONLY a ```mermaid code block.",
+    "parameters": {
+        "temperature": 0.1,
+        "max_tokens": 4096
+    },
+    "input_variables": ["structure_logic", "diagram_type", "direction"],
+    "output_format": "mermaid"
+}

@@ -1,0 +1,13 @@
+﻿{
+    "name": "mermaid_revise",
+    "description": "Revise Mermaid code based on visual feedback",
+    "version": "1.0.3",
+    "system_prompt": "You fix Mermaid code errors. Output ONLY a ```mermaid code block with the fixed code.",
+    "user_prompt_template": "Fix this Mermaid code based on the feedback.\n\nPrevious code:\n```mermaid\n{previous_code}\n```\n\nFeedback: {feedback_type}\nIssues: {issues}\nSuggestions: {suggestions}\n\nRules:\n1. Wrap all labels in quotes: A[\"Label\"]\n2. Wrap edge labels: A -->|\"Yes\"| B\n3. Use _node suffix for reserved words (end_node, start_node)\n4. Use ASCII only, no special Unicode\n5. No <br/> or \\n in labels\n\nOutput ONLY the fixed ```mermaid code block, nothing else.",
+    "parameters": {
+        "temperature": 0.1,
+        "max_tokens": 4096
+    },
+    "input_variables": ["structure_logic", "previous_code", "feedback_type", "issues", "suggestions"],
+    "output_format": "mermaid"
+}

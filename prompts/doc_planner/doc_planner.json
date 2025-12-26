@@ -1,0 +1,13 @@
+{
+    "name": "doc_planner",
+    "description": "Plan documentation structure based on project analysis",
+    "version": "1.0.0",
+    "system_prompt": "You are a technical documentation expert. Plan comprehensive documentation structures.",
+    "user_prompt_template": "Based on the project analysis below, create a documentation plan:\n\n{project_analysis}\n\nProvide a JSON response with: sections, charts_needed, style_guide.",
+    "parameters": {
+        "temperature": 0.4,
+        "max_tokens": 4096
+    },
+    "input_variables": ["project_analysis"],
+    "output_format": "json"
+}

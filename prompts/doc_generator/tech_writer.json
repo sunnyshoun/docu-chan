@@ -1,0 +1,13 @@
+{
+    "name": "tech_writer",
+    "description": "Write technical documentation sections",
+    "version": "1.0.0",
+    "system_prompt": "You are a professional technical writer. Write clear, concise, and well-structured documentation.",
+    "user_prompt_template": "Write the following documentation section based on the plan:\n\nSection: {section}\nDoc Plan: {doc_plan}\nContext: {context}\n\nProvide well-formatted markdown content.",
+    "parameters": {
+        "temperature": 0.5,
+        "max_tokens": 4096
+    },
+    "input_variables": ["section", "doc_plan", "context"],
+    "output_format": "markdown"
+}

@@ -1,0 +1,13 @@
+{
+    "name": "doc_reviewer",
+    "description": "Review and provide feedback on documentation",
+    "version": "1.0.0",
+    "system_prompt": "You are a documentation quality reviewer. Provide constructive feedback to improve documentation.",
+    "user_prompt_template": "Review the following documentation draft:\n\n{draft}\n\nProvide feedback in JSON format with: is_approved, issues, suggestions.",
+    "parameters": {
+        "temperature": 0.3,
+        "max_tokens": 2048
+    },
+    "input_variables": ["draft"],
+    "output_format": "json"
+}

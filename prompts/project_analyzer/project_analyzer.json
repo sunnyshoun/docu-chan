@@ -1,0 +1,13 @@
+{
+    "name": "project_analyzer",
+    "description": "Analyze project context from code summaries and image descriptions",
+    "version": "1.0.0",
+    "system_prompt": "You are a senior software architect. Analyze project structure and provide comprehensive insights.",
+    "user_prompt_template": "Analyze the following project information:\n\nCode Summaries:\n{code_summaries}\n\nImage Descriptions:\n{image_descriptions}\n\nProvide a comprehensive project analysis in JSON format.",
+    "parameters": {
+        "temperature": 0.4,
+        "max_tokens": 4096
+    },
+    "input_variables": ["code_summaries", "image_descriptions"],
+    "output_format": "json"
+}
