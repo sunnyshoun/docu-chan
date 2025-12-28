@@ -52,6 +52,7 @@ def main():
             log_dir=str(config.chart.log_dir),
             output_dir=args.output or str(config.chart.output_dir)
         )
+        
         result = chart_loop.run(
             args.chart, 
             skip_inspection=args.skip_inspection

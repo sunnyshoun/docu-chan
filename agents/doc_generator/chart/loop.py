@@ -1,4 +1,5 @@
 """Chart Loop Controller - 協調各個圖表生成元件"""
+import asyncio
 import json
 import re
 import shutil
@@ -60,7 +61,7 @@ class ChartLoop:
         self.executor = CodeExecutor(output_dir=str(self.log_dir))
         self.chartaf = ChartAF(
             vlm_model=self.vlm_model,
-            evaluator_model=self.evaluator_model
+            question_generator_model=self.evaluator_model
         )
         
         self._session_id: Optional[str] = None
@@ -132,10 +133,14 @@ class ChartLoop:
         session_dir = self.log_dir / self._session_id
         ensure_dir(session_dir)
         
+        # 設定 executor 輸出到 session_dir
+        self.executor.output_dir = session_dir
+        
         print(f"\n{'='*60}")
         print("Chart Generation Loop Started")
         print(f"{'='*60}")
         print(f"Request: {user_request[:100]}...")
+        print(f"Session: {self._session_id}")
         
         feedback_history: List[VisualFeedback] = []
         
@@ -189,8 +194,12 @@ class ChartLoop:
             
             # Step 3: Render
             print("  [Step 3] Rendering to PNG...")
-            render_name = f"{output_name or 'chart'}_{render_attempts}" if render_attempts > 1 else output_name
-            render_result = self.executor.render(current_code.code, output_name=render_name)
+            attempt_name = f"attempt_{render_attempts}"
+            
+            # 保存 mermaid 代碼到 session_dir
+            self._save_attempt_mmd(current_code.code, render_attempts)
+            
+            render_result = self.executor.render(current_code.code, output_name=attempt_name)
             
             if not render_result.success:
                 short_error = self._extract_error_message(render_result.error)
@@ -203,7 +212,9 @@ class ChartLoop:
                     
                     if fixed and fixed_code:
                         current_code = fixed_code
-                        render_result = self.executor.render(current_code.code, output_name=render_name)
+                        # 保存修復後的代碼
+                        self._save_attempt_mmd(current_code.code, render_attempts, suffix="_fixed")
+                        render_result = self.executor.render(current_code.code, output_name=f"{attempt_name}_fixed")
                         
                         if render_result.success:
                             visual_iterations += 1
@@ -251,12 +262,13 @@ class ChartLoop:
             print("  [Step 4] CHARTAF evaluation...")
             
             try:
-                current_feedback = self.chartaf.evaluate(
+                current_feedback = asyncio.run(self.chartaf.evaluate(
                     user_request=user_request,
                     tpa=tpa,
                     mermaid_code=current_code.code,
+                    structure=structure,
                     image_base64=final_image_base64
-                )
+                ))
                 feedback_history.append(current_feedback)
             except Exception as e:
                 print(f"  x Evaluation failed: {e}")
@@ -279,7 +291,10 @@ class ChartLoop:
         
         final_output_path = None
         if has_output:
-            final_output_path = self._copy_to_output(final_image_path, output_name)
+            # 保存 final.mmd 和 final.png 到 session_dir
+            self._save_final_files(current_code.code, final_image_path)
+            # 複製到 output_dir
+            final_output_path = self._copy_to_output(final_image_path, current_code.code, output_name)
         
         result = ChartResult(
             success=has_output,
@@ -304,15 +319,49 @@ class ChartLoop:
         
         return result
     
-    def _copy_to_output(self, source_path: str, output_name: Optional[str]) -> Path:
-        """複製結果到 output_dir"""
-        source = Path(source_path)
-        dest_name = f"{output_name}{source.suffix}" if output_name else source.name
-        dest = self.output_dir / dest_name
+    def _save_attempt_mmd(self, mermaid_code: str, attempt_num: int, suffix: str = "") -> None:
+        """保存每次嘗試的 mermaid 代碼"""
+        if not self._session_id:
+            return
+        session_dir = self.log_dir / self._session_id
+        filename = f"attempt_{attempt_num}{suffix}.mmd"
+        with open(session_dir / filename, "w", encoding="utf-8") as f:
+            f.write(mermaid_code)
+    
+    def _save_final_files(self, mermaid_code: str, image_path: str) -> None:
+        """保存 final.mmd 和 final.png 到 session_dir"""
+        if not self._session_id:
+            return
+        session_dir = self.log_dir / self._session_id
+        
+        # 保存 final.mmd
+        with open(session_dir / "final.mmd", "w", encoding="utf-8") as f:
+            f.write(mermaid_code)
+        
+        # 複製 final.png
+        source = Path(image_path)
+        if source.exists():
+            shutil.copy2(source, session_dir / f"final{source.suffix}")
+    
+    def _copy_to_output(self, image_path: str, mermaid_code: str, output_name: Optional[str]) -> Path:
+        """複製結果到 output_dir（包含 mmd 和 png）"""
+        source = Path(image_path)
+        base_name = output_name or "final"
+        
         ensure_dir(self.output_dir)
-        shutil.copy2(source, dest)
-        print(f"  v Saved: {dest}")
-        return dest
+        
+        # 複製 png
+        png_dest = self.output_dir / f"{base_name}.png"
+        shutil.copy2(source, png_dest)
+        
+        # 保存 mmd
+        mmd_dest = self.output_dir / f"{base_name}.mmd"
+        with open(mmd_dest, "w", encoding="utf-8") as f:
+            f.write(mermaid_code)
+        
+        print(f"  v Saved: {png_dest}")
+        print(f"  v Saved: {mmd_dest}")
+        return png_dest
     
     def _save_session_log(self, result: ChartResult, user_request: str):
         """保存 session 紀錄"""
@@ -338,10 +387,6 @@ class ChartLoop:
         
         with open(session_dir / "session.json", "w", encoding="utf-8") as f:
             json.dump(log_data, f, ensure_ascii=False, indent=2)
-        
-        if result.mermaid_code:
-            with open(session_dir / "final_code.mmd", "w", encoding="utf-8") as f:
-                f.write(result.mermaid_code.code)
     
     def _extract_error_message(self, error: str) -> str:
         """提取關鍵錯誤資訊"""

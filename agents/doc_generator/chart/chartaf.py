@@ -2,26 +2,48 @@
 CHARTAF - Chart Auto-Feedback System
 
 基於 C2 論文 (NAACL 2025) 的簡化架構：
-- VLM 直接回答二元問題（減少錯誤傳播）
-- 強調圖表結構檢查（流程圖需由上而下有序）
+- 大模型 (120b) 根據圖表類型動態生成評估問題
+- VLM (gemma) 逐一回答二元問題
 - 生成 Granular Feedback (RETAIN/EDIT/DISCARD/ADD)
+
+改進：
+- 問題由大模型根據圖表類型動態生成
+- VLM 只負責看圖回答 YES/NO
+- 支援 async 平行處理
+
+架構：
+- QuestionGenerator: 使用大模型生成評估問題
+- VisualInspector: 使用 VLM 回答二元問題
+- ChartAF: 組合以上兩者，執行完整評估流程
 """
+import asyncio
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
 from config.settings import get_config
 from agents.base import BaseAgent
-from models import VisualFeedback, FeedbackType, TPAAnalysis
+from models import VisualFeedback, FeedbackType, TPAAnalysis, StructureLogic
 from utils.image_utils import encode_image_base64
 
 
 @dataclass
+class EvaluationQuestion:
+    """評估問題定義"""
+    id: int
+    category: str
+    question: str
+    focus_points: str  # 該問題要檢查的重點
+
+
+@dataclass 
 class EvaluationResult:
     """評估結果"""
     id: int
+    category: str
     question: str
     answer: bool  # True = YES, False = NO
-    evidence: str
+    issue: str
+    fix: str
 
 
 @dataclass
@@ -34,18 +56,350 @@ class ChartAFResult:
     raw_data: Dict[str, Any]
 
 
-class ChartAF(BaseAgent):
+# ==================== QuestionGenerator ====================
+
+class QuestionGenerator(BaseAgent):
+    """
+    問題生成器
+    
+    使用大模型 (120b) 根據圖表類型動態生成評估問題
+    僅支援 async 模式
+    """
+    
+    PROMPT_NAME = "doc_generator/chartaf_question_generator"
+    
+    def __init__(self, model: Optional[str] = None):
+        config = get_config()
+        super().__init__(
+            name="QuestionGenerator",
+            model=model or config.models.project_analyzer,
+            think=False
+        )
+    
+    async def generate(
+        self,
+        diagram_type: str,
+        user_request: str,
+        design_spec: Optional[Dict[str, Any]] = None
+    ) -> List[EvaluationQuestion]:
+        """
+        根據圖表設計規格生成確認問題 (async only)
+        
+        Args:
+            diagram_type: 圖表類型 (flowchart, sequence, class, etc.)
+            user_request: 使用者原始請求
+            design_spec: Designer 產生的設計規格 (StructureLogic.to_dict())
+            
+        Returns:
+            List[EvaluationQuestion]: 生成的確認問題列表
+        """
+        self.log(f"Generating confirmation questions for {diagram_type}...")
+        
+        # 準備設計規格摘要
+        design_summary = self._format_design_spec(design_spec) if design_spec else "No design spec provided"
+        
+        try:
+            # 使用 BaseAgent 的 chat_async 方法
+            response = await self.chat_async(
+                prompt_name=self.PROMPT_NAME,
+                variables={
+                    "diagram_type": diagram_type,
+                    "user_request": user_request,
+                    "design_spec": design_summary
+                },
+                keep_history=False
+            )
+            
+            # 解析回應
+            response_content = response.message.content
+            result = self.parse_json(response_content)
+            questions_data = result.get("questions", [])
+            
+            if not questions_data:
+                raise ValueError("No questions in response")
+            
+            questions = []
+            for i, q in enumerate(questions_data, 1):
+                questions.append(EvaluationQuestion(
+                    id=i,
+                    category="auto",
+                    question=q.get("question", ""),
+                    focus_points=q.get("focus", "")
+                ))
+            
+            self.log(f"Generated {len(questions)} questions")
+            return questions
+            
+        except Exception as e:
+            self.log(f"Failed to parse questions: {e}")
+            self.log("Using fallback questions")
+            return self._generate_fallback_questions(design_spec)
+    
+    def _format_design_spec(self, design_spec: Dict[str, Any]) -> str:
+        """將設計規格格式化為易讀的摘要，包含連接模式分析"""
+        lines = []
+        
+        # 圖表基本資訊
+        diagram_type = design_spec.get("diagram_type", "unknown")
+        direction = design_spec.get("direction", "TD")
+        lines.append(f"Diagram Type: {diagram_type}")
+        lines.append(f"Direction: {direction}")
+        
+        # 節點資訊
+        nodes = design_spec.get("nodes", [])
+        lines.append(f"\nNodes ({len(nodes)} total):")
+        for node in nodes:
+            node_id = node.get("id", "?")
+            label = node.get("label", "?")
+            node_type = node.get("type", "process")
+            shape = node.get("shape", "rectangle")
+            lines.append(f"  - {node_id}: \"{label}\" (type={node_type}, shape={shape})")
+        
+        # 邊資訊 - 分析連接模式
+        edges = design_spec.get("edges", [])
+        
+        # 計算 fan-out (1對多) 和 fan-in (多對1) 模式
+        from_counts: Dict[str, List[str]] = {}  # from_node -> [to_nodes]
+        to_counts: Dict[str, List[str]] = {}    # to_node -> [from_nodes]
+        
+        for edge in edges:
+            from_node = edge.get("from", "")
+            to_node = edge.get("to", "")
+            
+            if from_node not in from_counts:
+                from_counts[from_node] = []
+            from_counts[from_node].append(to_node)
+            
+            if to_node not in to_counts:
+                to_counts[to_node] = []
+            to_counts[to_node].append(from_node)
+        
+        # 識別 fan-out 節點 (1對多)
+        fanout_nodes = {k: v for k, v in from_counts.items() if len(v) > 1}
+        # 識別 fan-in 節點 (多對1)
+        fanin_nodes = {k: v for k, v in to_counts.items() if len(v) > 1}
+        
+        # 計算實際連接數（每個邊代表一條連接線）
+        total_connections = len(edges)
+        
+        lines.append(f"\nConnections ({total_connections} edges):")
+        
+        # 顯示 fan-out 模式
+        if fanout_nodes:
+            lines.append(f"  Fan-out patterns (1-to-many):")
+            for from_node, to_nodes in fanout_nodes.items():
+                lines.append(f"    - {from_node} -> [{', '.join(to_nodes)}] ({len(to_nodes)} targets)")
+        
+        # 顯示 fan-in 模式  
+        if fanin_nodes:
+            lines.append(f"  Fan-in patterns (many-to-1):")
+            for to_node, from_nodes in fanin_nodes.items():
+                lines.append(f"    - [{', '.join(from_nodes)}] -> {to_node} ({len(from_nodes)} sources)")
+        
+        # 顯示所有邊
+        lines.append(f"  All edges:")
+        for edge in edges:
+            from_node = edge.get("from", "?")
+            to_node = edge.get("to", "?")
+            edge_label = edge.get("label", "")
+            if edge_label:
+                lines.append(f"    - {from_node} --\"{edge_label}\"--> {to_node}")
+            else:
+                lines.append(f"    - {from_node} --> {to_node}")
+        
+        # 樣式資訊
+        styling = design_spec.get("styling", {})
+        if styling:
+            lines.append(f"\nStyling: {styling}")
+        
+        return "\n".join(lines)
+    
+    def _generate_fallback_questions(
+        self, design_spec: Optional[Dict[str, Any]] = None
+    ) -> List[EvaluationQuestion]:
+        """根據設計規格生成 fallback 問題"""
+        questions = [
+            EvaluationQuestion(1, "layout", "Are all elements properly spaced without overlapping?", "Check for overlaps"),
+            EvaluationQuestion(2, "text", "Is all text clearly readable?", "Check text clarity"),
+            EvaluationQuestion(3, "structure", "Does the diagram have proper flow direction?", "Check flow direction"),
+            EvaluationQuestion(4, "completeness", "Are all elements fully visible without cutoff?", "Check for cut-off elements"),
+        ]
+        
+        if design_spec:
+            nodes = design_spec.get("nodes", [])
+            edges = design_spec.get("edges", [])
+            
+            # 添加節點數量確認問題
+            questions.append(EvaluationQuestion(
+                5, "nodes",
+                f"Does the diagram contain exactly {len(nodes)} nodes?",
+                f"Verify node count matches design: {len(nodes)} nodes"
+            ))
+            
+            # 檢查是否有 diamond/decision 節點
+            decision_nodes = [n for n in nodes if n.get("shape") == "diamond" or n.get("type") == "decision"]
+            if decision_nodes:
+                questions.append(EvaluationQuestion(
+                    6, "shapes",
+                    f"Are there {len(decision_nodes)} diamond-shaped decision nodes?",
+                    f"Verify decision nodes: {[n.get('label') for n in decision_nodes]}"
+                ))
+            
+            # 檢查是否有 fan-out 模式
+            from_counts: Dict[str, int] = {}
+            for edge in edges:
+                from_node = edge.get("from", "")
+                from_counts[from_node] = from_counts.get(from_node, 0) + 1
+            
+            fanout_nodes = [k for k, v in from_counts.items() if v > 1]
+            if fanout_nodes:
+                questions.append(EvaluationQuestion(
+                    len(questions) + 1, "fanout",
+                    "Are fan-out patterns (one node to multiple nodes) rendered correctly?",
+                    f"Check fan-out from nodes: {fanout_nodes}"
+                ))
+        
+        return questions
+
+
+# ==================== VisualInspector ====================
+
+class VisualInspector(BaseAgent):
+    """
+    視覺檢查器
+    
+    使用 VLM 逐一回答二元問題（YES/NO）
+    支援 async 平行處理
+    """
+    
+    PROMPT_NAME = "doc_generator/chartaf_single_question"
+    
+    def __init__(self, model: Optional[str] = None):
+        config = get_config()
+        super().__init__(
+            name="VisualInspector",
+            model=model or config.models.visual_inspector,
+            think=False  # VLM 不支援 thinking
+        )
+    
+    async def evaluate_question(
+        self,
+        diagram_type: str,
+        question: EvaluationQuestion,
+        image_base64: str
+    ) -> EvaluationResult:
+        """
+        評估單一問題
+        
+        Args:
+            diagram_type: 圖表類型
+            question: 評估問題
+            image_base64: Base64 編碼的圖片
+            
+        Returns:
+            EvaluationResult: 評估結果
+        """
+        try:
+            response = await self.chat_async(
+                prompt_name=self.PROMPT_NAME,
+                variables={
+                    "diagram_type": diagram_type,
+                    "question": question.question,
+                    "focus_points": question.focus_points
+                },
+                images=[image_base64],
+                keep_history=False
+            )
+            
+            # 解析回應：找第一個 YES 或 NO
+            response_text = response.message.content.strip()
+            response_upper = response_text.upper()
+            
+            # 找第一個 YES 或 NO 的位置
+            yes_pos = response_upper.find("YES")
+            no_pos = response_upper.find("NO")
+            
+            # 判斷答案（以先出現者為準）
+            if yes_pos == -1 and no_pos == -1:
+                answer = False
+            elif yes_pos == -1:
+                answer = False
+            elif no_pos == -1:
+                answer = True
+            else:
+                answer = yes_pos < no_pos
+            
+            # 提取修改建議（NO 後面的內容）
+            fix_suggestion = ""
+            if not answer and no_pos != -1:
+                fix_suggestion = response_text[no_pos + 2:].lstrip(": -,\n")
+                if not fix_suggestion:
+                    fix_suggestion = question.focus_points
+            
+            return EvaluationResult(
+                id=question.id,
+                category=question.category,
+                question=question.question,
+                answer=answer,
+                issue=question.question if not answer else "",
+                fix=fix_suggestion
+            )
+            
+        except Exception as e:
+            return EvaluationResult(
+                id=question.id,
+                category=question.category,
+                question=question.question,
+                answer=False,
+                issue=f"Evaluation error: {e}",
+                fix=""
+            )
+    
+    async def evaluate_all(
+        self,
+        diagram_type: str,
+        questions: List[EvaluationQuestion],
+        image_base64: str
+    ) -> List[EvaluationResult]:
+        """
+        平行評估所有問題
+        
+        Args:
+            diagram_type: 圖表類型
+            questions: 評估問題列表
+            image_base64: Base64 編碼的圖片
+            
+        Returns:
+            List[EvaluationResult]: 評估結果列表
+        """
+        self.log(f"Evaluating {len(questions)} questions in parallel...")
+        
+        tasks = [
+            self.evaluate_question(diagram_type, q, image_base64)
+            for q in questions
+        ]
+        results = await asyncio.gather(*tasks)
+        
+        # 按 id 排序並印出結果
+        results = sorted(results, key=lambda r: r.id)
+        for r in results:
+            answer_text = "YES" if r.answer else "NO"
+            self.log(f"  Q{r.id}: {r.question[:40]}... -> {answer_text}")
+        
+        return results
+
+
+# ==================== ChartAF ====================
+
+class ChartAF:
     """
     CHARTAF - Chart Auto-Feedback
     
-    簡化架構（方案 A）：
-    1. VLM 直接看圖回答二元問題（減少錯誤傳播）
-    2. 根據 TPA 生成針對性評估問題
+    組合 QuestionGenerator 和 VisualInspector，執行完整評估流程：
+    1. 大模型 (120b) 根據圖表類型動態生成評估問題
+    2. VLM (gemma) 逐一看圖回答二元問題
     3. 生成可操作的修改建議
     """
-    
-    PROMPT_EVALUATE = "doc_generator/chartaf_visual_eval"
-    PROMPT_FEEDBACK = "doc_generator/chartaf_feedback"
     
     # 問題類型映射
     ISSUE_TYPE_MAP = {
@@ -57,6 +411,10 @@ class ChartAF(BaseAgent):
         "layout_issue": FeedbackType.LAYOUT_ISSUE,
         "style": FeedbackType.STYLE_ISSUE,
         "style_issue": FeedbackType.STYLE_ISSUE,
+        "notation": FeedbackType.STYLE_ISSUE,
+        "text": FeedbackType.UNREADABLE,
+        "completeness": FeedbackType.CUTOFF,
+        "appropriateness": FeedbackType.OTHER,
         "approved": FeedbackType.APPROVED,
         "other": FeedbackType.OTHER
     }
@@ -67,33 +425,36 @@ class ChartAF(BaseAgent):
     def __init__(
         self,
         vlm_model: Optional[str] = None,
-        evaluator_model: Optional[str] = None
+        question_generator_model: Optional[str] = None
     ):
-        config = get_config()
-        super().__init__(
-            name="ChartAF",
-            model=vlm_model or config.models.visual_inspector,
-            think=False  # VLM 不支援 thinking
-        )
-        self.vlm_model = vlm_model or config.models.visual_inspector
-        self.evaluator_model = evaluator_model or config.models.diagram_designer
+        self.question_generator = QuestionGenerator(model=question_generator_model)
+        self.visual_inspector = VisualInspector(model=vlm_model)
         self._eval_history: List[ChartAFResult] = []
     
-    def evaluate(
+    def log(self, message: str) -> None:
+        """輸出日誌"""
+        print(f"[ChartAF] {message}")
+    
+    async def evaluate(
         self,
         user_request: str,
         tpa: TPAAnalysis,
         mermaid_code: str,
+        structure: Optional[StructureLogic] = None,
         image_path: Optional[str] = None,
         image_base64: Optional[str] = None
     ) -> VisualFeedback:
         """
-        執行 CHARTAF 評估流程
+        執行 CHARTAF 評估流程 (async only)
+        
+        1. 大模型 (120b) 根據設計規格生成確認問題
+        2. VLM (gemma) 平行回答所有問題
         
         Args:
             user_request: 原始使用者請求
             tpa: TPA 分析結果
             mermaid_code: Mermaid 代碼
+            structure: Designer 產生的結構邏輯（用於生成確認問題）
             image_path: 圖片路徑 (二選一)
             image_base64: Base64 編碼的圖片 (二選一)
         
@@ -107,17 +468,26 @@ class ChartAF(BaseAgent):
         if image_base64 is None:
             raise ValueError("No image provided")
         
-        # Step 1: VLM 直接評估圖片（回答二元問題）
-        self.log("Evaluating chart with VLM (binary questions)...")
-        eval_result = self._evaluate_with_vlm(tpa, mermaid_code, image_base64)
+        diagram_type = tpa.task_type
+        design_spec = structure.to_dict() if structure else None
         
-        score = eval_result.get("score", 0.0)
+        # Step 1: 使用 QuestionGenerator 生成確認問題 (async)
+        questions = await self.question_generator.generate(diagram_type, user_request, design_spec)
+        
+        # Step 2: 使用 VisualInspector 平行回答所有二元問題
+        self.log(f"VLM evaluating {diagram_type} with {len(questions)} questions (parallel)...")
+        evaluations = await self.visual_inspector.evaluate_all(diagram_type, questions, image_base64)
+        
+        # 計算分數
+        yes_count = sum(1 for e in evaluations if e.answer)
+        score = yes_count / len(evaluations) if evaluations else 0.0
         is_approved = score >= self.APPROVAL_THRESHOLD
         
-        self.log(f"Evaluation score: {score:.2f}, approved: {is_approved}")
+        self.log(f"Evaluation score: {score:.2f} ({yes_count}/{len(evaluations)}), approved: {is_approved}")
         
-        # Step 2: 生成 Granular Feedback
+        # Step 3: 生成 Granular Feedback
         self.log("Generating granular feedback...")
+        eval_result = self._build_eval_result(evaluations, score)
         feedback = self._generate_feedback(
             user_request, mermaid_code, eval_result, is_approved
         )
@@ -126,7 +496,7 @@ class ChartAF(BaseAgent):
         chartaf_result = ChartAFResult(
             score=score,
             is_approved=is_approved,
-            evaluations=self._parse_evaluations(eval_result),
+            evaluations=evaluations,
             feedback=feedback,
             raw_data=eval_result
         )
@@ -136,6 +506,28 @@ class ChartAF(BaseAgent):
         self._print_evaluation_report(chartaf_result, eval_result)
         
         return feedback
+    
+    def _build_eval_result(
+        self,
+        evaluations: List[EvaluationResult],
+        score: float
+    ) -> Dict[str, Any]:
+        """將評估結果轉為字典格式"""
+        return {
+            "evaluations": [
+                {
+                    "id": e.id,
+                    "category": e.category,
+                    "question": e.question,
+                    "answer": "YES" if e.answer else "NO",
+                    "issue": e.issue,
+                    "fix": e.fix
+                }
+                for e in evaluations
+            ],
+            "score": score,
+            "summary": f"Passed {sum(1 for e in evaluations if e.answer)}/{len(evaluations)} checks"
+        }
     
     def _print_evaluation_report(
         self,
@@ -212,26 +604,6 @@ class ChartAF(BaseAgent):
         
         print("\n" + "=" * 60 + "\n")
     
-    def _evaluate_with_vlm(
-        self,
-        tpa: TPAAnalysis,
-        mermaid_code: str,
-        image_base64: str
-    ) -> Dict[str, Any]:
-        """VLM 直接看圖回答二元問題"""
-        response = self.chat(
-            prompt_name=self.PROMPT_EVALUATE,
-            variables={
-                "tpa_analysis": tpa.to_dict(),
-                "diagram_type": tpa.task_type,
-                "mermaid_code": mermaid_code
-            },
-            images=[image_base64],
-            keep_history=False  # 評估不需要保留歷史
-        )
-        
-        return self.parse_json(response.message.content)
-    
     def _generate_feedback(
         self,
         user_request: str,
@@ -278,27 +650,19 @@ class ChartAF(BaseAgent):
             raw_data=evaluation
         )
     
-    def _parse_evaluations(self, eval_result: Dict[str, Any]) -> List[EvaluationResult]:
-        """解析評估結果"""
-        results = []
-        for item in eval_result.get("evaluations", []):
-            results.append(EvaluationResult(
-                id=item.get("id", len(results) + 1),
-                question=item.get("question", ""),
-                answer=item.get("answer", "").upper() == "YES",
-                evidence=item.get("evidence", item.get("issue", ""))
-            ))
-        return results
-    
-    def get_score(
+    async def get_score(
         self,
         user_request: str,
         tpa: TPAAnalysis,
         mermaid_code: str,
-        image_base64: str
+        image_base64: str,
+        structure: Optional[StructureLogic] = None
     ) -> float:
-        """CHARTAF-S: 只取得分數"""
-        feedback = self.evaluate(user_request, tpa, mermaid_code, image_base64=image_base64)
+        """CHARTAF-S: 只取得分數 (async)"""
+        await self.evaluate(
+            user_request, tpa, mermaid_code,
+            structure=structure, image_base64=image_base64
+        )
         if self._eval_history:
             return self._eval_history[-1].score
         return 0.0

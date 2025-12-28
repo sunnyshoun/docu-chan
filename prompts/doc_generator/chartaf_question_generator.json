@@ -1,0 +1,13 @@
+{
+    "name": "chartaf_question_generator",
+    "description": "Generate confirmation questions to verify coder output matches designer specifications",
+    "version": "2.0.0",
+    "system_prompt": "You are a diagram QA specialist. Generate binary (YES/NO) confirmation questions to verify that the rendered diagram correctly implements the designer's specifications. Focus on structural accuracy, node shapes, and visual fidelity.",
+    "user_prompt_template": "Generate 5-7 confirmation questions to verify the rendered {diagram_type} diagram matches the design.\n\n<design_specification>\n{design_spec}\n</design_specification>\n\n<user_request>\n{user_request}\n</user_request>\n\nGenerate questions that CONFIRM the coder correctly implemented:\n\n1. **Node Count & Presence** - Are all designed nodes present in the diagram?\n2. **Node Shapes** - Do nodes use the correct shapes as specified?\n   - START/END should be stadium shapes (rounded ends)\n   - Decisions should be diamond shapes\n   - Processes should be rectangles\n   - Check if each node's shape matches its type\n3. **Edge Connections** - Are all specified edges correctly connected?\n4. **Edge Labels** - Do edges have the correct labels as designed?\n5. **Flow Direction** - Does the diagram flow in the specified direction (TD/LR)?\n6. **Fan-out/Fan-in Patterns** - If 1-to-many or many-to-1 patterns were designed, are they rendered correctly?\n7. **Visual Layout** - Is the layout clear without overlaps or cutoffs?\n\nEach question must be answerable with YES (matches design) or NO (deviates from design).\n\nRespond in JSON:\n```json\n{\n    \"questions\": [\n        {\n            \"question\": \"<specific confirmation question>\",\n            \"focus\": \"<what aspect of the design to verify>\",\n            \"design_reference\": \"<relevant part of the design spec>\"\n        }\n    ]\n}\n```",
+    "parameters": {
+        "temperature": 0.3,
+        "max_tokens": 1200
+    },
+    "input_variables": ["diagram_type", "design_spec", "user_request"],
+    "output_format": "json"
+}

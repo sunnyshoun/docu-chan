@@ -2,6 +2,7 @@
 Base Agent - 所有 Agent 共用的基礎類別
 
 使用 Ollama Python SDK 進行 LLM 呼叫。
+支援同步與非同步兩種模式。
 """
 import json
 import re
@@ -9,7 +10,7 @@ import logging
 from abc import ABC
 from typing import Any, Optional
 
-from .client import get_client
+from .client import get_client, get_async_client
 from .prompts import format_prompt, get_prompt_params
 
 
@@ -183,6 +184,131 @@ class BaseAgent(ABC):
             "content": result,
             "tool_name": tool_name
         })
+    
+    # ==================== Async Chat ====================
+    
+    async def chat_async(
+        self,
+        prompt_name: str,
+        variables: dict[str, Any],
+        images: Optional[list[str]] = None,
+        tools: Optional[list[dict]] = None,
+        format: Optional[str | dict] = None,
+        keep_history: bool = True
+    ):
+        """
+        非同步呼叫 LLM（使用 prompt template）
+        
+        Args:
+            prompt_name: Prompt 名稱（對應 prompts/ 目錄下的 JSON）
+            variables: Prompt 變數
+            images: Base64 圖片列表（用於多模態模型）
+            tools: Tool definitions（用於 function calling）
+            format: 輸出格式（"json" 或 JSON schema）
+            keep_history: 是否保留 messages 歷史
+        
+        Returns:
+            ChatResponse: Ollama 回應物件
+        """
+        system, user = format_prompt(prompt_name, variables)
+        params = get_prompt_params(prompt_name)
+        
+        # 建立新訊息
+        new_messages: list[dict[str, Any]] = []
+        if system:
+            new_messages.append({"role": "system", "content": system})
+        
+        user_msg: dict[str, Any] = {"role": "user", "content": user}
+        if images:
+            user_msg["images"] = images
+        new_messages.append(user_msg)
+        
+        # 合併歷史訊息
+        all_messages = self.messages + new_messages
+        
+        # 建立呼叫參數
+        options = {
+            "temperature": params.get("temperature", 0.7),
+            "num_predict": params.get("max_tokens", 4096),
+        }
+        
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": all_messages,
+            "options": options,
+            "stream": False,
+        }
+        
+        if self.think:
+            kwargs["think"] = True
+        if tools:
+            kwargs["tools"] = tools
+        if format:
+            kwargs["format"] = format
+        
+        # 非同步呼叫 Ollama
+        response = await get_async_client().chat(**kwargs)
+        
+        # 保存歷史
+        if keep_history:
+            self.messages.extend(new_messages)
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": response.message.content or ""
+            }
+            if response.message.tool_calls:
+                assistant_msg["tool_calls"] = response.message.tool_calls
+            self.messages.append(assistant_msg)
+        
+        return response
+    
+    async def chat_raw_async(
+        self,
+        messages: list[dict[str, Any]],
+        tools: Optional[list[dict]] = None,
+        format: Optional[str | dict] = None,
+        keep_history: bool = False
+    ):
+        """
+        非同步直接傳入 messages 呼叫（不使用 prompt template）
+        
+        Args:
+            messages: 訊息列表
+            tools: Tool definitions
+            format: 輸出格式
+            keep_history: 是否保存到歷史
+        
+        Returns:
+            ChatResponse: Ollama 回應物件
+        """
+        all_messages = self.messages + messages
+        
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": all_messages,
+            "stream": False,
+        }
+        
+        if self.think:
+            kwargs["think"] = True
+        if tools:
+            kwargs["tools"] = tools
+        if format:
+            kwargs["format"] = format
+        
+        response = await get_async_client().chat(**kwargs)
+        
+        if keep_history:
+            self.messages.extend(messages)
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": response.message.content or ""
+            }
+            if response.message.tool_calls:
+                assistant_msg["tool_calls"] = response.message.tool_calls
+            self.messages.append(assistant_msg)
+        
+        return response
     
     # ==================== History ====================
     
