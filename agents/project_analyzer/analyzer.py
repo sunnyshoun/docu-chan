@@ -5,7 +5,6 @@ Project Analyzer - Phase 1 Agent
 import json
 import sys
 import chardet
-from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
 from config import config
@@ -26,22 +25,42 @@ class ProjectAnalyzer(BaseAgent):
     dump_file: str
     report_file: str
     _implements = {}
-    def execute(self, project_path: str, **kwargs) -> Dict[str, Any]:
-        """分析專案（未實現）"""
-        raise NotImplementedError("Phase 1: ProjectAnalyzer 尚未實現")
 
+    @classmethod
+    def execute(cls, project_path: str, **kwargs) -> None:
+        pa = ProjectAnalyzer(
+            root_dir=project_path,
+            prompt_dir=config.prompts_dir/"project_analyzer",
+            dump_file=Path(__file__).parent/"dump.json",
+            report_file=Path(__file__).parent/"report.json"
+        )
+        retry_limit = kwargs.get("retry_limit") or 5
+        for i in range(retry_limit):
+            print(f"Retry: {i}" if i > 0 else "")
+            try:
+                pa.start(i>0)
+                while not pa.report_done():
+                    print("Trying get missed file(s)")
+                    pa.start(True)
+                print("All report generated")
+            except KeyboardInterrupt:
+                print("KeyboardInterrupt")
+                return
+            except:
+                pass
+    
     def _check_implement(self):
         for f in TOOL_DOCS:
             if not self._implements.get(f):
                 raise NotImplementedError(f"function \"{f}\" has not been implemented")
 
-    def __init__(self, root_dir:str, prompt_dir: str, dump_file: str, report_file: str) -> None:
+    def __init__(self, root_dir:str, prompt_dir: str|Path, dump_file: str|Path, report_file: str|Path) -> None:
         super().__init__(
             name="ProjectAnalyzer",
             model=config.models.code_reader
         )
-        self.dump_file = dump_file
-        self.report_file = report_file
+        self.dump_file = Path(dump_file).as_posix()
+        self.report_file = Path(report_file).as_posix()
         self.root_parent = Path(root_dir).parent.as_posix()
         _file_tree = file_utils.build_file_tree(Path(root_dir).as_posix())
         if not _file_tree:
@@ -61,7 +80,7 @@ class ProjectAnalyzer(BaseAgent):
             "report_summary": self.report_summary
         }
 
-    def get_file(self, path: str):
+    def _get_file(self, path: str):
         abs_path = Path(path)
         if not abs_path.is_absolute():
             abs_path = Path(self.root_parent).joinpath(path)
@@ -90,7 +109,7 @@ class ProjectAnalyzer(BaseAgent):
         return f"error: undetermined encode\nforced-binary-replace>>>>>\n" + str(raw_data)
 
     def read_file(self, file_path: str, n: int, **kwargs) -> str:
-        text = self.get_file(file_path)
+        text = self._get_file(file_path)
         if len(text) == 0:
             return "error: no text found"
         
@@ -135,7 +154,13 @@ class ProjectAnalyzer(BaseAgent):
             return
         self.report = json.loads(file_utils.read_file(self.report_file))
         
-
+    def report_done(self) -> bool:
+        self.load_report()
+        for node in self.file_nodes:
+            if node.relative_to(self.root_parent) in self.report:
+                return False
+        return True
+    
     def start(self, recovery_run = False):
         if recovery_run:
             self.load_report()
@@ -167,9 +192,5 @@ class ProjectAnalyzer(BaseAgent):
 if __name__ == "__main__":
     # ===================================
     root_dir = sys.argv[1]
-    prompt_dir = "prompts/project_analyzer"
-    dump_file = "agents/project_analyzer/dump.json"
-    report_file = "agents/project_analyzer/report.json"
     # ===================================
-    fs = ProjectAnalyzer(root_dir, prompt_dir, dump_file, report_file)
-    fs.start(recovery_run=True)
+    ProjectAnalyzer.execute(root_dir)
