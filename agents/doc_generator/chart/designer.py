@@ -9,9 +9,8 @@ from typing import Optional, Dict, Any, List
 from config.settings import get_config
 from agents.base import BaseAgent
 from models import TPAAnalysis, StructureLogic, ChartTask
-from utils.generator_tools import (
-    GENERATOR_TOOLS, execute_generator_tool, set_project_path
-)
+from tools import get_tools, execute
+from tools.file_ops import set_project_root
 
 
 class DiagramDesigner(BaseAgent):
@@ -52,7 +51,7 @@ class DiagramDesigner(BaseAgent):
         
         # 設定專案路徑（用於 tool calling）
         if project_path:
-            set_project_path(project_path)
+            set_project_root(project_path)
     
     def execute_from_task(self, task: ChartTask, project_path: Optional[str] = None) -> dict:
         """
@@ -66,7 +65,7 @@ class DiagramDesigner(BaseAgent):
             dict: 包含 tpa, structure, gathered_context
         """
         if project_path:
-            set_project_path(project_path)
+            set_project_root(project_path)
         
         self.log(f"Processing task: {task.title}")
         
@@ -124,7 +123,7 @@ class DiagramDesigner(BaseAgent):
         for iteration in range(self.MAX_TOOL_ITERATIONS):
             response = self.chat_raw(
                 messages=messages,
-                tools=GENERATOR_TOOLS,
+                tools=get_tools("read_file", "report_summary"),
                 keep_history=False
             )
             
@@ -145,11 +144,15 @@ class DiagramDesigner(BaseAgent):
                     arguments = {}
                 
                 self.log(f"  Calling tool: {tool_name}")
-                result = execute_generator_tool(tool_name, arguments)
+                try:
+                    result = execute(tool_name, **arguments)
+                    result_dict = {"success": True, "result": str(result)}
+                except Exception as e:
+                    result_dict = {"success": False, "error": str(e)}
                 
                 # 記錄結果
-                if result.get("success"):
-                    self._process_tool_result(tool_name, arguments, result, gathered)
+                if result_dict.get("success"):
+                    self._process_tool_result(tool_name, arguments, result_dict, gathered)
                 
                 # 加入 tool 結果到對話
                 messages.append({

@@ -1,13 +1,13 @@
 {
     "name": "image_reader",
-    "description": "Read and describe images",
-    "version": "1.0.0",
-    "system_prompt": "You are an image analysis expert. Describe images in detail for documentation purposes.",
-    "user_prompt_template": "Describe the provided image in detail. Focus on:\n1. Type of image (UI, diagram, screenshot, etc.)\n2. Key elements visible\n3. Overall purpose\n\nProvide a JSON response.",
+    "description": "Analyze images from a code repository for documentation",
+    "version": "2.0.0",
+    "system_prompt": "You are a senior software architect and technical documentation expert.\n\nAnalyze the provided image and generate a structured technical analysis for documentation purposes.",
+    "user_prompt_template": "Analyze this image from the project repository:\n\nImage path: {image_path}\n\nProvide analysis in this format:\n\n## 1. Image Type\nDetermine the type (System Architecture Diagram, Sequence Diagram, UI Screenshot, ER Diagram, Flowchart, etc.)\n\n## 2. Summary\nBrief 1-2 sentence description of what this image represents.\n\n## 3. Key Components\nList visible text labels, components, or elements:\n- [Component]: [Role/Function]\n\n## 4. Flow & Interactions\nIf the image contains arrows or sequences, describe the data flow or steps.\n\n## 5. Technical Inference\nInfer technology stack or patterns based on visual elements.",
     "parameters": {
         "temperature": 0.3,
-        "max_tokens": 2048
+        "max_tokens": 1024
     },
-    "input_variables": [],
-    "output_format": "json"
+    "input_variables": ["image_path"],
+    "output_format": "markdown"
 }

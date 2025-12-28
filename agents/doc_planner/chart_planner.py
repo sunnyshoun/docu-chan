@@ -20,12 +20,8 @@ from utils.coa_utils import (
     CoAProcessor, CoAChunk, WorkerOutput, ManagerOutput,
     create_file_chunks, aggregate_worker_outputs
 )
-from utils.tools import (
-    PLANNER_TOOLS, execute_tool,
-    read_file_content, analyze_file_dependencies,
-    get_file_structure, find_entry_points,
-    build_dependency_graph
-)
+from tools import get_tools, execute
+from tools.file_ops import set_project_root
 
 
 class ChartPlanner(BaseAgent):

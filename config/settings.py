@@ -38,8 +38,6 @@ class ChartConfig:
     max_iterations: int = 5
     output_format: str = "png"
     render_timeout: int = 30
-    log_dir: Optional[Path] = None      # 日誌/中間產物 (logs/phase3/)
-    output_dir: Optional[Path] = None   # 最終輸出 (outputs/)
 
 
 @dataclass
@@ -101,20 +99,13 @@ class Config:
         logs_dir = project_root / "logs"
         outputs_dir = project_root / "outputs"
         
-        # Chart 配置
-        chart = ChartConfig(
-            log_dir=logs_dir / "phase3" / "charts",
-            output_dir=outputs_dir / "final" / "diagrams"
-        )
-        
         return cls(
             api_key=api_key,
             api_base_url=api_base_url,
             project_root=project_root,
             prompts_dir=project_root / "prompts",
             outputs_dir=outputs_dir,
-            logs_dir=logs_dir,
-            chart=chart
+            logs_dir=logs_dir
         )
     
     def __repr__(self) -> str:

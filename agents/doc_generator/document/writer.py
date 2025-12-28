@@ -10,9 +10,8 @@ from typing import Dict, Any, Optional, List
 from config.settings import get_config
 from agents.base import BaseAgent
 from models import DocPlan, DocumentTask
-from utils.generator_tools import (
-    GENERATOR_TOOLS, execute_generator_tool, set_project_path
-)
+from tools import get_tools, execute
+from tools.file_ops import set_project_root
 
 
 class DocWriter(BaseAgent):
@@ -54,7 +53,7 @@ class DocWriter(BaseAgent):
         self._gathered_context: Dict[str, Any] = {}
         
         if project_path:
-            set_project_path(project_path)
+            set_project_root(project_path)
     
     def execute_from_task(
         self, 
@@ -72,11 +71,7 @@ class DocWriter(BaseAgent):
             dict: 包含 content, gathered_context, task
         """
         if project_path:
-            set_project_path(project_path)
-        
-        self.log(f"Processing task: {task.title}")
-        
-        # Step 1: 根據 task 收集上下文
+            set_project_root(project_path)
         self.log("Gathering context from source files...")
         gathered = self.gather_context(task)
         self._gathered_context = gathered
@@ -123,7 +118,7 @@ class DocWriter(BaseAgent):
         for iteration in range(self.MAX_TOOL_ITERATIONS):
             response = self.chat_raw(
                 messages=messages,
-                tools=GENERATOR_TOOLS,
+                tools=get_tools("read_file", "report_summary"),
                 keep_history=False
             )
             
@@ -141,10 +136,14 @@ class DocWriter(BaseAgent):
                     arguments = {}
                 
                 self.log(f"  Calling tool: {tool_name}")
-                result = execute_generator_tool(tool_name, arguments)
+                try:
+                    result = execute(tool_name, **arguments)
+                    result_dict = {"success": True, "result": str(result)}
+                except Exception as e:
+                    result_dict = {"success": False, "error": str(e)}
                 
-                if result.get("success"):
-                    self._process_tool_result(tool_name, arguments, result, gathered)
+                if result_dict.get("success"):
+                    self._process_tool_result(tool_name, arguments, result_dict, gathered)
                 
                 messages.append({
                     "role": "assistant",
@@ -153,7 +152,7 @@ class DocWriter(BaseAgent):
                 })
                 messages.append({
                     "role": "tool",
-                    "content": json.dumps(result, ensure_ascii=False)[:2000]
+                    "content": json.dumps(result_dict, ensure_ascii=False)[:2000]
                 })
         
         return gathered

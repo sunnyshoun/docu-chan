@@ -1,194 +1,162 @@
 """
 Project Analyzer - Phase 1 Agent
 
+分析專案檔案並產生摘要。
 """
 import json
-import sys
-import chardet
 from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
+
 from config.settings import get_config
 from agents.base import BaseAgent
-from agents.project_analyzer.picture_analyzer import PictureAnalyzer
-from agents.project_analyzer.tool_docs import TOOL_DOCS
+from agents.prompts import load_prompt
 from utils import file_utils
+from tools import get_tools, execute
+from tools.file_ops import set_project_root, get_reports, clear_reports
 
 
 class ProjectAnalyzer(BaseAgent):
-    root_parent: str
-    file_nodes: list[file_utils.FileNode]
-    system_prompt: str
-    user_prompt_base: str
-    pic_analyzer: PictureAnalyzer
-    dumps = []
-    report = {}
-    dump_file: str
-    report_file: str
-    _implements = {}
-    def execute(self, project_path: str, **kwargs) -> Dict[str, Any]:
-        """分析專案（未實現）"""
-        raise NotImplementedError("Phase 1: ProjectAnalyzer 尚未實現")
-
-    def _check_implement(self):
-        for f in TOOL_DOCS:
-            if not self._implements.get(f):
-                raise NotImplementedError(f"function \"{f}\" has not been implemented")
-
-    def __init__(self, root_dir:str, prompt_dir: str, dump_file: str, report_file: str) -> None:
+    """專案分析器 - 分析每個檔案並產生摘要"""
+    
+    def __init__(self, root_dir: str, prompt_dir: str, dump_file: str, report_file: str) -> None:
         super().__init__(
             name="ProjectAnalyzer",
             model=get_config().models.code_reader
         )
+        
+        self.root_dir = Path(root_dir).resolve()
         self.dump_file = dump_file
         self.report_file = report_file
-        self.root_parent = Path(root_dir).parent.as_posix()
-        _file_tree = file_utils.build_file_tree(Path(root_dir).as_posix())
-        if not _file_tree:
-            raise FileNotFoundError("no file tree built")
+        self.dumps = []
+        self.report = {}
         
-        self.file_nodes = _file_tree.to_list()
-        files = "\n".join([f"{node.relative_to(self.root_parent)}: {node}" for node in self.file_nodes])
-
-        self.pic_analyzer = PictureAnalyzer(self.root_parent, Path(prompt_dir) / "picture.md")
-
-        self.system_prompt = file_utils.read_file(Path(prompt_dir) / "system.md") + files
-        self.user_prompt_base = file_utils.read_file(Path(prompt_dir) / "user.md")
-
-        self._implements = {
-            "read_file": self.read_file,
-            "get_image_description": self.pic_analyzer.get_image_description,
-            "report_summary": self.report_summary
-        }
-
-    def get_file(self, path: str):
-        abs_path = Path(path)
-        if not abs_path.is_absolute():
-            abs_path = Path(self.root_parent).joinpath(path)
-        print(f"path: {path}, open: {abs_path}")
-        raw_data = b""
-        try:
-            raw_data = abs_path.read_bytes()
-            return raw_data.decode('utf-8')
-        except FileNotFoundError:
-            return "error: no such file"
-        except UnicodeDecodeError:
-            pass
-
-        result = chardet.detect(raw_data)
-        detected_encoding = result['encoding']
-        confidence = result['confidence']
+        # 設定 tools 的專案根目錄
+        set_project_root(str(self.root_dir))
         
-        if detected_encoding and confidence > 0.7:
-            try:
-                print(f"偵測到編碼: {detected_encoding} (信心度: {confidence})")
-                return raw_data.decode(detected_encoding)
-            except UnicodeDecodeError:
-                pass
+        # 建立檔案樹
+        file_tree = file_utils.build_file_tree(str(self.root_dir))
+        if not file_tree:
+            raise FileNotFoundError(f"Cannot build file tree for: {root_dir}")
         
-        print("警告：無法精確識別編碼。")
-        return f"error: undetermined encode\nforced-binary-replace>>>>>\n" + str(raw_data)
-
-    def read_file(self, file_path: str, n: int, **kwargs) -> str:
-        text = self.get_file(file_path)
-        if len(text) == 0:
-            return "error: no text found"
+        self.file_nodes = file_tree.to_list()
         
-        lines = [f"{line:.200s}{('...'+str(len(line)-200)+' more') if len(line)>200 else ''}".strip() for line in text.splitlines() if line.strip()]
+        # 載入 prompt
+        prompt_data = load_prompt("project_analyzer/project_analyzer")
+        file_list = "\n".join([
+            f"- {node.relative_to(str(self.root_dir.parent))}" 
+            for node in self.file_nodes
+        ])
+        
+        self.system_prompt = prompt_data["system_prompt"] + "\n\n" + file_list
+        self.user_template = prompt_data["user_prompt_template"]
+        
+        # 取得 tool definitions
+        self.tool_definitions = get_tools("read_file", "report_summary", "get_image_description")
     
-        if n > 0:
-            return "\n".join(lines[:n])
-        else:
-            return "\n".join(lines)
+    def execute(self, project_path: str, **kwargs) -> Dict[str, Any]:
+        """執行分析（透過 start 方法）"""
+        self.start()
+        return {"report": self.report}
     
-    def report_summary(self, path: str, is_important: bool, summary: str, **kwargs) -> None:
-        self.report[path] = {"is_important": is_important, "summary": summary}
-
-    def init_messages(self, node: file_utils.FileNode):
-        return [
-            {
-                "role": "system",
-                "content": self.system_prompt
-            },
-            {
-                "role": "user",
-                "content": f"<filepath>{node.relative_to(self.root_parent)}</filepath><objective>{self.user_prompt_base}</objective>"
-            }
-        ]
-    
-    def tools_call(self, tool_calls: list):
-        reported = False
-        for tool in tool_calls:
-            tool_name = tool["function"]["name"]
-            arguments = tool['function']['arguments']
-            if tool_name == "report_summary":
-                reported = True
-            if tool_name in TOOL_DOCS:
-                print(f"call: {tool_name} with {arguments}")
-                self.add_tool_result(tool_name, self._implements[tool_name](**arguments))
-            else:
-                print(f"unknown tool: {tool_name}")
-        return reported
-    
-    def load_report(self):
-        if not Path(self.report_file).exists():
-            return
-        self.report = json.loads(file_utils.read_file(self.report_file))
+    def start(self, max_retries: int = 3):
+        """開始分析所有檔案"""
+        clear_reports()
         
-
-    def start(self, recovery_run = False, max_retries: int = 3):
-        if recovery_run:
-            self.load_report()
-            print("recovery")
-        self._check_implement()
         for node in self.file_nodes:
-            if node.relative_to(self.root_parent) in self.report:
-                print(f"continue: {node.path}")
+            file_path = node.relative_to(str(self.root_dir.parent))
+            
+            # 跳過已分析的檔案
+            if file_path in self.report:
+                print(f"[skip] {file_path}")
                 continue
-            REPORTED = False
-            self.messages = self.init_messages(node)
+            
+            print(f"[analyze] {file_path}")
+            
+            # 初始化對話
+            self.messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": self.user_template.format(file_path=file_path)}
+            ]
+            
+            # 呼叫 LLM
+            reported = False
             retry_count = 0
-            while not REPORTED:
-                print(f"thinking: {node.path}")
-                self.dumps.append({"type":"request", "time":str(datetime.now()),"content":self.messages})
+            
+            while not reported:
+                self.dumps.append({
+                    "type": "request",
+                    "time": str(datetime.now()),
+                    "file": file_path
+                })
+                
                 try:
-                    response = self.chat_raw([], tools=[tool[1] for tool in TOOL_DOCS.items()], keep_history=True)
+                    response = self.chat_raw([], tools=self.tool_definitions, keep_history=True)
                 except Exception as e:
-                    error_msg = str(e)
-                    print(f"[WARN] API error: {error_msg}")
                     retry_count += 1
+                    print(f"  [error] {e}")
+                    
                     if retry_count >= max_retries:
-                        print(f"[ERROR] Max retries ({max_retries}) reached for {node.path}, skipping...")
-                        # 記錄為無法分析的檔案
-                        self.report[node.relative_to(self.root_parent)] = {
+                        print(f"  [failed] Max retries reached, skipping...")
+                        self.report[file_path] = {
                             "is_important": False,
-                            "summary": f"[Analysis failed after {max_retries} retries: {error_msg}]"
+                            "summary": f"[Analysis failed: {e}]"
                         }
                         break
-                    print(f"[INFO] Retrying ({retry_count}/{max_retries})...")
-                    # 重置 messages 並重試
-                    self.messages = self.init_messages(node)
+                    
+                    print(f"  [retry] {retry_count}/{max_retries}")
                     continue
                 
-                self.dumps.append({"type":"response", "time":str(datetime.now()),"content":response.model_dump()})
-                tool_calls = response["message"].get("tool_calls", None)
-                if tool_calls is None:
+                self.dumps.append({
+                    "type": "response",
+                    "time": str(datetime.now()),
+                    "content": response.model_dump() if hasattr(response, 'model_dump') else str(response)
+                })
+                
+                # 處理 tool calls
+                tool_calls = response.get("message", {}).get("tool_calls")
+                if not tool_calls:
                     break
-                REPORTED = self.tools_call(tool_calls)
+                
+                reported = self._handle_tool_calls(tool_calls, file_path)
             
-            file_utils.write_file(self.dump_file, json.dumps(self.dumps, indent=2))
-            file_utils.write_file(self.report_file, json.dumps(self.report, indent=2))
-
-        print("done")
-
-
-
-if __name__ == "__main__":
-    # ===================================
-    root_dir = sys.argv[1]
-    prompt_dir = "prompts/project_analyzer"
-    dump_file = "agents/project_analyzer/dump.json"
-    report_file = "agents/project_analyzer/report.json"
-    # ===================================
-    fs = ProjectAnalyzer(root_dir, prompt_dir, dump_file, report_file)
-    fs.start(recovery_run=True)
+            # 儲存進度
+            self._save_progress()
+        
+        # 從 tools 收集報告
+        self.report.update(get_reports())
+        self._save_progress()
+        print("[done] Analysis complete")
+    
+    def _handle_tool_calls(self, tool_calls: list, current_file: str) -> bool:
+        """處理 tool calls，回傳是否已回報摘要"""
+        reported = False
+        
+        for tool in tool_calls:
+            tool_name = tool["function"]["name"]
+            arguments = tool["function"]["arguments"]
+            
+            print(f"  [tool] {tool_name}")
+            
+            if tool_name == "report_summary":
+                reported = True
+                # 直接儲存到 report
+                self.report[arguments.get("path", current_file)] = {
+                    "is_important": arguments.get("is_important", False),
+                    "summary": arguments.get("summary", "")
+                }
+                self.add_tool_result(tool_name, "Reported successfully")
+            else:
+                # 執行 tool
+                try:
+                    result = execute(tool_name, **arguments)
+                    self.add_tool_result(tool_name, str(result) if result else "OK")
+                except Exception as e:
+                    self.add_tool_result(tool_name, f"Error: {e}")
+        
+        return reported
+    
+    def _save_progress(self):
+        """儲存分析進度"""
+        file_utils.write_file(self.dump_file, json.dumps(self.dumps, indent=2))
+        file_utils.write_file(self.report_file, json.dumps(self.report, indent=2))

@@ -1,1 +1,0 @@
-Aim to text files, pictures may contained some information, others may be marked as not important.  According to the file, summarize the logic, behaviors, dataflow, etc.
