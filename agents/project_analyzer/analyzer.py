@@ -8,7 +8,7 @@ import chardet
 from typing import Dict, Any
 from datetime import datetime
 from pathlib import Path
-from config import config
+from config.settings import get_config
 from agents.base import BaseAgent
 from agents.client import get_client
 from agents.project_analyzer.tool_docs import TOOL_DOCS
@@ -37,7 +37,7 @@ class ProjectAnalyzer(BaseAgent):
     def __init__(self, root_dir:str, prompt_dir: str, dump_file: str, report_file: str) -> None:
         super().__init__(
             name="ProjectAnalyzer",
-            model=config.models.code_reader
+            model=get_config().models.code_reader
         )
         self.dump_file = dump_file
         self.report_file = report_file
@@ -134,7 +134,7 @@ class ProjectAnalyzer(BaseAgent):
             self.report = json.load(f)
         
 
-    def start(self, recovery_run = False):
+    def start(self, recovery_run = False, max_retries: int = 3):
         if recovery_run:
             self.load_report()
             print("recovery")
@@ -145,10 +145,29 @@ class ProjectAnalyzer(BaseAgent):
                 continue
             REPORTED = False
             self.messages = self.init_messages(node)
+            retry_count = 0
             while not REPORTED:
                 print(f"thinking: {node.path}")
                 self.dumps.append({"type":"request", "time":str(datetime.now()),"content":self.messages})
-                response = self.chat_raw([], tools=[tool[1] for tool in TOOL_DOCS.items()], keep_history=True)
+                try:
+                    response = self.chat_raw([], tools=[tool[1] for tool in TOOL_DOCS.items()], keep_history=True)
+                except Exception as e:
+                    error_msg = str(e)
+                    print(f"[WARN] API error: {error_msg}")
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        print(f"[ERROR] Max retries ({max_retries}) reached for {node.path}, skipping...")
+                        # 記錄為無法分析的檔案
+                        self.report[node.relative_to(self.root_parent)] = {
+                            "is_important": False,
+                            "summary": f"[Analysis failed after {max_retries} retries: {error_msg}]"
+                        }
+                        break
+                    print(f"[INFO] Retrying ({retry_count}/{max_retries})...")
+                    # 重置 messages 並重試
+                    self.messages = self.init_messages(node)
+                    continue
+                
                 self.dumps.append({"type":"response", "time":str(datetime.now()),"content":response.model_dump()})
                 tool_calls = response["message"].get("tool_calls", None)
                 if tool_calls is None:

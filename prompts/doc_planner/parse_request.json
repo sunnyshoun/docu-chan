@@ -1,0 +1,13 @@
+{
+    "name": "parse_request",
+    "description": "Parse user request to identify chart and document requirements",
+    "version": "1.0.0",
+    "system_prompt": "You are an expert at understanding user requests for documentation and diagram generation. Parse the user's request to identify what charts and documents they need.",
+    "user_prompt_template": "Parse the following user request to identify chart and document requirements:\n\n**User Request:**\n{user_request}\n\n---\n\nIdentify and separate the request into chart requirements and document requirements.\n\nProvide your analysis in the following JSON format:\n\n```json\n{\n    \"chart_requests\": [\n        \"<Specific chart request 1: e.g., 'Create a flowchart showing the main process flow'>\",\n        \"<Specific chart request 2>\"\n    ],\n    \"doc_requests\": [\n        \"<Specific document request 1: e.g., 'Create a README with installation instructions'>\",\n        \"<Specific document request 2>\"\n    ],\n    \"analysis\": {\n        \"primary_focus\": \"<chart/document/both>\",\n        \"complexity\": \"<simple/moderate/complex>\",\n        \"notes\": \"<Any additional notes about the request>\"\n    }\n}\n```\n\nChart-related keywords: flowchart, diagram, graph, sequence, class diagram, architecture diagram, ER diagram, state diagram, mindmap, API diagram, visualization\n\nDocument-related keywords: README, documentation, guide, manual, API docs, installation, usage, tutorial, changelog, reference\n\nIf the request is ambiguous, include it in both categories. If no specific items are mentioned, infer from context what might be needed.",
+    "parameters": {
+        "temperature": 0.2,
+        "max_tokens": 1024
+    },
+    "input_variables": ["user_request"],
+    "output_format": "json"
+}

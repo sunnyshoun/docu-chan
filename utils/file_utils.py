@@ -236,7 +236,12 @@ def build_file_tree(
     gitignore_path = path_obj / ".gitignore"
     if gitignore_path.exists() and gitignore_path.is_file():
         try:
-            new_patterns = read_file(gitignore_path)
+            gitignore_content = read_file(gitignore_path)
+            # 將 .gitignore 內容按行分割，過濾空行和註解
+            new_patterns = [
+                line.strip() for line in gitignore_content.splitlines()
+                if line.strip() and not line.strip().startswith('#')
+            ]
             current_patterns.extend(new_patterns)
         except Exception as e:
             print(f"無法讀取 .gitignore: {e}")

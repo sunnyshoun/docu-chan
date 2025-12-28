@@ -10,7 +10,7 @@ from typing import Optional, List, Tuple
 from config import config
 from models import (
     TPAAnalysis, StructureLogic, MermaidCode,
-    VisualFeedback, FeedbackType, ChartResult
+    VisualFeedback, FeedbackType, ChartResult, ChartTask
 )
 from utils.file_utils import ensure_dir
 
@@ -309,6 +309,219 @@ class ChartLoop:
         )
         
         self._save_session_log(result, user_request)
+        
+        status = "Completed" if has_output else "Failed"
+        print(f"\n{'='*60}")
+        print(f"Chart Generation {status}")
+        if final_output_path:
+            print(f"Output: {final_output_path}")
+        print(f"{'='*60}\n")
+        
+        return result
+    
+    def run_from_task(
+        self,
+        task: ChartTask,
+        project_path: str,
+        output_name: Optional[str] = None,
+        skip_inspection: bool = False
+    ) -> ChartResult:
+        """
+        從 ChartTask 執行圖表生成（新的主要入口）
+        
+        與 run() 的差異：
+        - Designer 會根據 task 的指引自主讀取檔案
+        - 使用 execute_from_task() 而非 execute()
+        
+        Args:
+            task: Planner 產生的圖表任務
+            project_path: 專案路徑（用於 Designer 讀檔）
+            output_name: 輸出檔名
+            skip_inspection: 是否跳過視覺檢查
+            
+        Returns:
+            ChartResult: 生成結果
+        """
+        self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_dir = self.log_dir / self._session_id
+        ensure_dir(session_dir)
+        
+        self.executor.output_dir = session_dir
+        
+        print(f"\n{'='*60}")
+        print("Chart Generation Loop Started (from Task)")
+        print(f"{'='*60}")
+        print(f"Task: {task.title}")
+        print(f"Type: {task.chart_type.value}")
+        print(f"Session: {self._session_id}")
+        
+        feedback_history: List[VisualFeedback] = []
+        
+        # Step 1: Design（使用新的 execute_from_task，Designer 會自己讀檔）
+        print("\n[Step 1] Designing chart structure...")
+        print("  Designer will gather context from source files...")
+        
+        # 建立帶有專案路徑的 Designer
+        designer = DiagramDesigner(project_path=project_path)
+        
+        try:
+            design_data = designer.execute_from_task(task, project_path)
+            tpa: TPAAnalysis = design_data["tpa"]
+            structure: StructureLogic = design_data["structure"]
+            user_request = design_data["user_request"]  # 包含收集到的資訊
+            gathered = design_data.get("gathered_context", {})
+            
+            files_read = len(gathered.get("files_read", []))
+            print(f"  v Files read by Designer: {files_read}")
+        except Exception as e:
+            return ChartResult(success=False, error=f"Design failed: {e}")
+        
+        print(f"  v TPA: {tpa.task_type}")
+        print(f"  v Structure: {structure.node_count} nodes, {structure.edge_count} edges")
+        
+        # 後續流程與 run() 相同
+        current_code: Optional[MermaidCode] = None
+        current_feedback: Optional[VisualFeedback] = None
+        final_image_path: Optional[str] = None
+        final_image_base64: Optional[str] = None
+        
+        visual_iterations = 0
+        render_attempts = 0
+        max_attempts = self.MAX_RENDER_RETRIES * 2
+        
+        while visual_iterations < self.MAX_VISUAL_ITERATIONS and render_attempts < max_attempts:
+            render_attempts += 1
+            print(f"\n[Iteration {visual_iterations + 1}/{self.MAX_VISUAL_ITERATIONS}] (attempt {render_attempts})")
+            
+            coder = self._create_coder("A")
+            
+            try:
+                if current_code is None:
+                    print("  [Step 2] Generating Mermaid code...")
+                    current_code = coder.generate(structure)
+                else:
+                    print("  [Step 2] Revising code based on feedback...")
+                    current_code = coder.revise(structure, current_code.code, current_feedback)
+                print(f"  v Code generated")
+            except Exception as e:
+                print(f"  x Code generation failed: {e}")
+                current_feedback = VisualFeedback(
+                    is_approved=False,
+                    feedback_type=FeedbackType.OTHER,
+                    issues=[f"Code error: {e}"],
+                    suggestions=["Simplify the structure"]
+                )
+                feedback_history.append(current_feedback)
+                continue
+            
+            print("  [Step 3] Rendering to PNG...")
+            attempt_name = f"attempt_{render_attempts}"
+            self._save_attempt_mmd(current_code.code, render_attempts)
+            
+            render_result = self.executor.render(current_code.code, output_name=attempt_name)
+            
+            if not render_result.success:
+                short_error = self._extract_error_message(render_result.error)
+                print(f"  x Render failed: {short_error}")
+                
+                if self.use_dual_coder:
+                    print("  [Step 3.5] Dual Coder ping-pong...")
+                    fixed, fixed_code = self._ping_pong_fix(structure, current_code.code, short_error)
+                    
+                    if fixed and fixed_code:
+                        current_code = fixed_code
+                        self._save_attempt_mmd(current_code.code, render_attempts, suffix="_fixed")
+                        render_result = self.executor.render(current_code.code, output_name=f"{attempt_name}_fixed")
+                        
+                        if render_result.success:
+                            visual_iterations += 1
+                            final_image_path = render_result.image_path
+                            final_image_base64 = render_result.image_base64
+                            print(f"  v Rendered: {final_image_path}")
+                        else:
+                            current_feedback = VisualFeedback(
+                                is_approved=False,
+                                feedback_type=FeedbackType.OTHER,
+                                issues=[self._extract_error_message(render_result.error)],
+                                suggestions=["Simplify diagram"]
+                            )
+                            feedback_history.append(current_feedback)
+                            continue
+                    else:
+                        current_feedback = VisualFeedback(
+                            is_approved=False,
+                            feedback_type=FeedbackType.OTHER,
+                            issues=[short_error],
+                            suggestions=["Simplify diagram significantly"]
+                        )
+                        feedback_history.append(current_feedback)
+                        continue
+                else:
+                    current_feedback = VisualFeedback(
+                        is_approved=False,
+                        feedback_type=FeedbackType.OTHER,
+                        issues=[short_error],
+                        suggestions=["Fix syntax error"]
+                    )
+                    feedback_history.append(current_feedback)
+                    continue
+            else:
+                visual_iterations += 1
+                final_image_path = render_result.image_path
+                final_image_base64 = render_result.image_base64
+                print(f"  v Rendered: {final_image_path}")
+            
+            if skip_inspection:
+                print("  [Step 4] Skipping inspection")
+                break
+            
+            print("  [Step 4] CHARTAF evaluation...")
+            
+            try:
+                current_feedback = asyncio.run(self.chartaf.evaluate(
+                    user_request=user_request,
+                    tpa=tpa,
+                    mermaid_code=current_code.code,
+                    structure=structure,
+                    image_base64=final_image_base64
+                ))
+                feedback_history.append(current_feedback)
+            except Exception as e:
+                print(f"  x Evaluation failed: {e}")
+                break
+            
+            if current_feedback.is_approved:
+                print("  v Approved!")
+                break
+            else:
+                print(f"  x Issues: {current_feedback.feedback_type.value}")
+                for issue in current_feedback.issues[:2]:
+                    print(f"    - {issue}")
+                
+                if self._is_repeated_feedback(feedback_history):
+                    print("  > Repeated issues, accepting...")
+                    break
+        
+        has_output = current_code is not None and final_image_path is not None
+        
+        final_output_path = None
+        if has_output:
+            self._save_final_files(current_code.code, final_image_path)
+            final_output_path = self._copy_to_output(final_image_path, current_code.code, output_name or task.title.replace(" ", "_"))
+        
+        result = ChartResult(
+            success=has_output,
+            tpa=tpa,
+            structure=structure,
+            mermaid_code=current_code,
+            image_path=str(final_output_path) if final_output_path else final_image_path,
+            image_base64=final_image_base64,
+            iterations=visual_iterations,
+            feedback_history=feedback_history,
+            error=None if has_output else "Failed to generate chart"
+        )
+        
+        self._save_session_log(result, f"[Task] {task.title}: {task.description}")
         
         status = "Completed" if has_output else "Failed"
         print(f"\n{'='*60}")

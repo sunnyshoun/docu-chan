@@ -14,10 +14,10 @@ from .base import BaseAgent
 from .project_analyzer import ProjectAnalyzer
 
 # Doc Planner
-from .doc_planner import DocPlanner
+from .doc_planner import DocPlanner, ChartPlanner, PlannerOrchestrator
 
 # Doc Generator
-from .doc_generator import DocWriter, ChartLoop
+from .doc_generator import DocWriter, ChartLoop, DiagramDesigner
 
 # Packer
 from .packer import Packer
@@ -29,9 +29,12 @@ __all__ = [
     "ProjectAnalyzer",
     # Phase 2: Planning
     "DocPlanner",
+    "ChartPlanner",
+    "PlannerOrchestrator",
     # Phase 3: Generation
     "DocWriter",
     "ChartLoop",
+    "DiagramDesigner",
     # Phase 4: Packaging
     "Packer",
 ]

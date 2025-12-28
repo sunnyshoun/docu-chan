@@ -16,6 +16,8 @@ class ModelConfig:
     
     # Phase 2
     doc_planner: str = "gpt-oss:120b"
+    chart_planner: str = "gpt-oss:120b"  # Chart Planner
+    planner_worker: str = "gpt-oss:20b"  # CoA Worker
     
     # Phase 3 - Text
     tech_writer: str = "gpt-oss:20b"

@@ -1,0 +1,13 @@
+{
+    "name": "chart_plan",
+    "description": "Plan charts based on user request and project context",
+    "version": "1.0.0",
+    "system_prompt": "You are a diagram planning expert. Create detailed chart plans based on user requests and project analysis.",
+    "user_prompt_template": "Create a chart generation plan based on the following:\n\n**User Request:**\n{user_request}\n\n**Project Context:**\n{project_context}\n\n**Dependency Graph:**\n```json\n{dependency_graph}\n```\n\n**Available Files:**\n{file_list}\n\n---\n\nCreate a detailed chart plan in the following JSON format:\n\n```json\n{\n    \"charts\": [\n        {\n            \"chart_type\": \"<flowchart/sequence/class/state/erDiagram/architecture/api/mindmap/gantt/pie>\",\n            \"title\": \"<Chart title>\",\n            \"description\": \"<Detailed description of what the chart should show>\",\n            \"target_files\": [\"<List of relevant source files>\"],\n            \"context\": \"<Specific context and details for generating this chart>\",\n            \"tpa_hints\": {\n                \"task_type\": \"<Type of visualization task>\",\n                \"audience\": \"<Target audience: developer/manager/user>\",\n                \"complexity\": \"<simple/moderate/complex>\"\n            },\n            \"priority\": 1\n        }\n    ],\n    \"execution_notes\": \"<Any notes about the order or dependencies between charts>\"\n}\n```\n\nChart Types:\n- flowchart: Process flows, algorithms, decision trees\n- sequence: API calls, component interactions, message flows\n- class: Class hierarchies, relationships, interfaces\n- state: State machines, lifecycle diagrams\n- erDiagram: Database schemas, entity relationships\n- architecture: System architecture, component overview\n- api: API endpoints, request/response flows\n- mindmap: Concept maps, feature breakdowns\n\nConsider:\n1. What the user specifically requested\n2. The project's structure and complexity\n3. Which diagrams would be most useful\n4. The appropriate level of detail",
+    "parameters": {
+        "temperature": 0.4,
+        "max_tokens": 4096
+    },
+    "input_variables": ["user_request", "project_context", "dependency_graph", "file_list"],
+    "output_format": "json"
+}
