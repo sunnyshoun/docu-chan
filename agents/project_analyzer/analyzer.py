@@ -157,7 +157,7 @@ class ProjectAnalyzer(BaseAgent):
     def report_done(self) -> bool:
         self.load_report()
         for node in self.file_nodes:
-            if node.relative_to(self.root_parent) in self.report:
+            if not node.relative_to(self.root_parent) in self.report:
                 return False
         return True
     
