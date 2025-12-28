@@ -1,15 +1,32 @@
 from pathlib import Path
 import sys
 from agents.base import BaseAgent
+from agents.prompts import load_prompt
 from config import config
 
 class PictureAnalyzer(BaseAgent):
-    prompt: str
     base: Path
-    def __init__(self, base: str | Path, prompt_file: str | Path):
+    system_prompt: str
+    user_template: str
+    
+    def __init__(self, base: str | Path, prompt_file: str | Path | None = None):
         super().__init__("PictureAnalyzer", config.models.image_reader)
-        self.prompt = Path(prompt_file).read_text()
         self.base = Path(base)
+        
+        # 載入 prompt（支援 JSON 或舊的 .md 格式）
+        if prompt_file and Path(prompt_file).suffix == ".json":
+            prompt_data = load_prompt("project_analyzer/image_reader")
+            self.system_prompt = prompt_data["system_prompt"]
+            self.user_template = prompt_data["user_prompt_template"]
+        elif prompt_file and Path(prompt_file).exists():
+            # 相容舊的 .md 格式
+            self.system_prompt = Path(prompt_file).read_text()
+            self.user_template = "Analyze this image at \"{image_path}\""
+        else:
+            # 預設使用 JSON prompt
+            prompt_data = load_prompt("project_analyzer/image_reader")
+            self.system_prompt = prompt_data["system_prompt"]
+            self.user_template = prompt_data["user_prompt_template"]
 
     def get_image_description(self, image_path: str, **kwargs) -> str:
         """
@@ -29,11 +46,11 @@ class PictureAnalyzer(BaseAgent):
                 [
                     {
                         "role": "system",
-                        "content": self.prompt
+                        "content": self.system_prompt
                     },
                     {
                         'role': 'user',
-                        'content': f"This is a picture at \"{image_path}\", analyze this image and generate a structured technical analysis report.",
+                        'content': self.user_template.format(image_path=image_path),
                         'images': [img_data]
                     }
                 ],

@@ -8,7 +8,7 @@ import json
 import re
 import logging
 from abc import ABC
-from typing import Any, Callable, Mapping, Optional, Union
+from typing import Any, Optional
 
 from ollama import ChatResponse
 
@@ -128,7 +128,7 @@ class BaseAgent(ABC):
     def chat_raw(
         self,
         messages: list[dict[str, Any]],
-        tools: Optional[list[Mapping[str, Any] | Callable]] = None,
+        tools: Optional[list[dict]] = None,
         format: Optional[str | dict] = None,
         keep_history: bool = False
     ) -> ChatResponse:

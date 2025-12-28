@@ -11,6 +11,7 @@ from pathlib import Path
 from config.settings import get_config
 from agents.base import BaseAgent
 from agents.prompts import load_prompt
+from agents.project_analyzer.picture_analyzer import PictureAnalyzer
 from utils import file_utils
 from tools import get_tools, execute
 from tools.file_ops import set_project_root, get_reports, clear_reports
@@ -33,6 +34,12 @@ class ProjectAnalyzer(BaseAgent):
         
         # 設定 tools 的專案根目錄
         set_project_root(str(self.root_dir))
+        
+        # 初始化圖片分析器
+        self.pic_analyzer = PictureAnalyzer(
+            base=str(self.root_dir.parent),
+            prompt_file=Path(prompt_dir) / "image_reader.json"
+        )
         
         # 建立檔案樹
         file_tree = file_utils.build_file_tree(str(self.root_dir))
@@ -68,10 +75,10 @@ class ProjectAnalyzer(BaseAgent):
             
             # 跳過已分析的檔案
             if file_path in self.report:
-                print(f"[skip] {file_path}")
+                print(f"[skip] \"{file_path}\"")
                 continue
             
-            print(f"[analyze] {file_path}")
+            print(f"[analyze] \"{file_path}\"")
             
             # 初始化對話
             self.messages = [
@@ -146,6 +153,14 @@ class ProjectAnalyzer(BaseAgent):
                     "summary": arguments.get("summary", "")
                 }
                 self.add_tool_result(tool_name, "Reported successfully")
+            elif tool_name == "get_image_description":
+                # 使用 PictureAnalyzer 分析圖片
+                try:
+                    image_path = arguments.get("image_path", "")
+                    result = self.pic_analyzer.get_image_description(image_path)
+                    self.add_tool_result(tool_name, result)
+                except Exception as e:
+                    self.add_tool_result(tool_name, f"Error: {e}")
             else:
                 # 執行 tool
                 try:
