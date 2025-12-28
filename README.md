@@ -1,4 +1,5 @@
 # docu-chan
+
 2025 NCKU "THEORY OF COMPUTATION" final project. An AI-powered agent that automates documentation, README generation, and Mermaid flowcharts.
 
 ## Overview
@@ -41,7 +42,7 @@ Doc Generator is a multi-phase pipeline for automatically generating comprehensi
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12+
 - Node.js 18+ (用於 Mermaid 圖表渲染)
 
 ### 1. Clone & Setup Python

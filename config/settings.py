@@ -1,6 +1,4 @@
-"""
-Configuration management for Doc Generator
-"""
+"""Configuration management for Doc Generator"""
 import os
 from pathlib import Path
 from typing import Optional
@@ -10,9 +8,9 @@ from dotenv import load_dotenv
 
 @dataclass
 class ModelConfig:
-    """模型配置"""
+    """模型配置（預設值定義於此，不從 .env 讀取）"""
     # Phase 1
-    code_reader: str = "gemma3:4b"
+    code_reader: str = "gpt-oss:20b"
     image_reader: str = "gemma3:4b"
     project_analyzer: str = "gpt-oss:120b"
     
@@ -97,30 +95,14 @@ class Config:
             "https://api-gateway.netdb.csie.ncku.edu.tw"
         )
         
-        # 模型配置
-        models = ModelConfig(
-            code_reader=os.getenv("CODE_READER_MODEL", "gemma3:4b"),
-            image_reader=os.getenv("IMAGE_READER_MODEL", "gemma3:4b"),
-            project_analyzer=os.getenv("PROJECT_ANALYZER_MODEL", "gpt-oss:120b"),
-            doc_planner=os.getenv("DOC_PLANNER_MODEL", "gpt-oss:120b"),
-            tech_writer=os.getenv("TECH_WRITER_MODEL", "gpt-oss:20b"),
-            doc_reviewer=os.getenv("DOC_REVIEWER_MODEL", "gpt-oss:20b"),
-            diagram_designer=os.getenv("DIAGRAM_DESIGNER_MODEL", "gpt-oss:20b"),
-            mermaid_coder=os.getenv("MERMAID_CODER_MODEL", "gpt-oss:20b"),
-            visual_inspector=os.getenv("VISUAL_INSPECTOR_MODEL", "gemma3:4b"),
-            publisher=os.getenv("PUBLISHER_MODEL", "gemma3:4b")
-        )
-        
         # 路徑配置
         logs_dir = project_root / "logs"
         outputs_dir = project_root / "outputs"
         
         # Chart 配置
         chart = ChartConfig(
-            max_iterations=int(os.getenv("CHART_MAX_ITERATIONS", "5")),
-            output_format=os.getenv("CHART_OUTPUT_FORMAT", "png"),
-            log_dir=logs_dir / "phase3" / "charts",      # 日誌/中間產物
-            output_dir=outputs_dir / "final" / "diagrams"  # 最終輸出
+            log_dir=logs_dir / "phase3" / "charts",
+            output_dir=outputs_dir / "final" / "diagrams"
         )
         
         return cls(
@@ -130,7 +112,6 @@ class Config:
             prompts_dir=project_root / "prompts",
             outputs_dir=outputs_dir,
             logs_dir=logs_dir,
-            models=models,
             chart=chart
         )
     

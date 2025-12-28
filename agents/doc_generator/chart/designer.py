@@ -1,78 +1,89 @@
 """Diagram Designer - TPA 分析與結構設計"""
-import json
 from typing import Optional
 
-from agents.base import BaseAgent, AgentResult
+from config.settings import get_config
+from agents.base import BaseAgent
 from models import TPAAnalysis, StructureLogic
 
 
 class DiagramDesigner(BaseAgent):
-    """圖表設計器：負責 TPA 分析與結構邏輯設計"""
+    """圖表設計師，負責 TPA 分析及結構邏輯設計"""
     
     PROMPT_TPA = "doc_generator/designer_tpa"
     PROMPT_STRUCTURE = "doc_generator/designer_structure"
     
     def __init__(self, model: Optional[str] = None):
+        config = get_config()
         super().__init__(
             name="DiagramDesigner",
-            model=model or "gpt-oss:120b",
-            use_thinking=True
+            model=model or config.models.diagram_designer,
+            think=True
         )
         self._last_tpa: Optional[TPAAnalysis] = None
         self._last_structure: Optional[StructureLogic] = None
     
-    def execute(self, user_request: str, **kwargs) -> AgentResult:
-        """設計圖表結構"""
-        self._log(f"Processing request: {user_request[:100]}...")
+    def analyze_tpa(self, user_request: str) -> TPAAnalysis:
+        """
+        分析 Task, Purpose, Audience
         
-        try:
-            tpa_result = self._analyze_tpa(user_request)
-            if not tpa_result.success:
-                return tpa_result
-            tpa = tpa_result.data
-            self._last_tpa = tpa
+        Args:
+            user_request: 使用者請求
             
-            structure_result = self._design_structure(user_request, tpa)
-            if not structure_result.success:
-                return structure_result
-            structure = structure_result.data
-            self._last_structure = structure
+        Returns:
+            TPAAnalysis: TPA 分析結果
+        """
+        self.log("Analyzing TPA...")
+        response = self.chat(
+            prompt_name=self.PROMPT_TPA,
+            variables={"user_request": user_request}
+        )
+        tpa_data = self.parse_json(response.message.content)
+        tpa = TPAAnalysis.from_dict(tpa_data)
+        self._last_tpa = tpa
+        return tpa
+    
+    def design_structure(self, user_request: str, tpa: TPAAnalysis) -> StructureLogic:
+        """
+        設計圖表結構
+        
+        Args:
+            user_request: 使用者請求
+            tpa: TPA 分析結果
             
-            return AgentResult(
-                success=True,
-                data={"tpa": tpa, "structure": structure, "user_request": user_request}
-            )
-        except Exception as e:
-            return AgentResult(success=False, data=None, error=str(e))
+        Returns:
+            StructureLogic: 結構邏輯
+        """
+        self.log("Designing structure...")
+        response = self.chat(
+            prompt_name=self.PROMPT_STRUCTURE,
+            variables={
+                "tpa_analysis": tpa.to_dict(),
+                "user_request": user_request
+            }
+        )
+        structure_data = self.parse_json(response.message.content)
+        structure = StructureLogic.from_dict(structure_data)
+        self._last_structure = structure
+        return structure
     
-    def _analyze_tpa(self, user_request: str) -> AgentResult:
-        """分析 Task, Purpose, Audience"""
-        self._log("Analyzing TPA...")
-        try:
-            response = self._call_llm(
-                prompt_name=self.PROMPT_TPA,
-                variables={"user_request": user_request}
-            )
-            tpa_data = self._parse_json_response(response.content)
-            return AgentResult(success=True, data=TPAAnalysis.from_dict(tpa_data))
-        except Exception as e:
-            return AgentResult(success=False, data=None, error=str(e))
-    
-    def _design_structure(self, user_request: str, tpa: TPAAnalysis) -> AgentResult:
-        """設計圖表結構"""
-        self._log("Designing structure...")
-        try:
-            response = self._call_llm(
-                prompt_name=self.PROMPT_STRUCTURE,
-                variables={
-                    "tpa_analysis": json.dumps(tpa.to_dict(), ensure_ascii=False, indent=2),
-                    "user_request": user_request
-                }
-            )
-            structure_data = self._parse_json_response(response.content)
-            return AgentResult(success=True, data=StructureLogic.from_dict(structure_data))
-        except Exception as e:
-            return AgentResult(success=False, data=None, error=str(e))
+    def execute(self, user_request: str) -> dict:
+        """
+        執行完整設計流程
+        
+        Args:
+            user_request: 使用者請求
+            
+        Returns:
+            dict: 包含 tpa, structure, user_request
+        """
+        self.log(f"Processing request: {user_request[:100]}...")
+        tpa = self.analyze_tpa(user_request)
+        structure = self.design_structure(user_request, tpa)
+        return {
+            "tpa": tpa,
+            "structure": structure,
+            "user_request": user_request
+        }
     
     @property
     def last_tpa(self) -> Optional[TPAAnalysis]:
@@ -81,3 +92,4 @@ class DiagramDesigner(BaseAgent):
     @property
     def last_structure(self) -> Optional[StructureLogic]:
         return self._last_structure
+

@@ -1,11 +1,12 @@
-"""Chart Loop Controller - 協調整個圖表生成流程"""
+"""Chart Loop Controller - 協調各個圖表生成元件"""
 import json
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Tuple
 
+from config import config
 from models import (
     TPAAnalysis, StructureLogic, MermaidCode,
     VisualFeedback, FeedbackType, ChartResult
@@ -22,7 +23,7 @@ class ChartLoop:
     """
     圖表生成迴圈控制器
     
-    流程：Designer → Coder → Executor → ChartAF (→ Coder)
+    流程：Designer -> Coder -> Executor -> ChartAF (-> Coder)
     
     支援雙 Coder ping-pong 機制修復渲染錯誤。
     """
@@ -39,12 +40,14 @@ class ChartLoop:
         coder_model: Optional[str] = None,
         coder_model_b: Optional[str] = None,
         evaluator_model: Optional[str] = None,
-        vlm_model: str = "gemma3:4b",
+        vlm_model: Optional[str] = None,
         use_dual_coder: bool = True
     ):
         self.use_dual_coder = use_dual_coder
-        self.coder_model_a = coder_model or "gpt-oss:20b"
+        self.coder_model_a = coder_model or config.models.mermaid_coder
         self.coder_model_b = coder_model_b or self.coder_model_a
+        self.vlm_model = vlm_model or config.models.visual_inspector
+        self.evaluator_model = evaluator_model or config.models.visual_inspector
         
         # 路徑配置
         self.log_dir = Path(log_dir) if log_dir else Path("logs/phase3/charts")
@@ -52,12 +55,12 @@ class ChartLoop:
         ensure_dir(self.log_dir)
         ensure_dir(self.output_dir)
         
-        # 初始化各組件
+        # 初始化元件
         self.designer = DiagramDesigner(model=designer_model)
         self.executor = CodeExecutor(output_dir=str(self.log_dir))
         self.chartaf = ChartAF(
-            vlm_model=vlm_model,
-            evaluator_model=evaluator_model or "gpt-oss:20b"
+            vlm_model=self.vlm_model,
+            evaluator_model=self.evaluator_model
         )
         
         self._session_id: Optional[str] = None
@@ -76,15 +79,15 @@ class ChartLoop:
         """
         雙 Coder ping-pong 修復機制
         
-        流程：A → B → A → B...
+        流程：A -> B -> A -> B...
         每次修復都建立全新 Coder，避免 context 污染。
         """
         current_code = broken_code
         current_error = error_message
-        max_attempts = self.MAX_PING_PONG_ROUNDS * 2  # A 和 B 各嘗試 N 次
+        max_attempts = self.MAX_PING_PONG_ROUNDS * 2  # A 和 B 各 N 次
         
         for attempt in range(max_attempts):
-            # A 和 B 交替：0=A, 1=B, 2=A, 3=B...
+            # A 和 B 交替，0=A, 1=B, 2=A, 3=B...
             coder_id = "A" if attempt % 2 == 0 else "B"
             round_num = attempt // 2 + 1
             
@@ -92,28 +95,29 @@ class ChartLoop:
             
             # 建立全新 Coder
             coder = self._create_coder(coder_id)
-            fix_result = coder.fix_error(structure, current_code, current_error)
             
-            if not fix_result.success:
-                print(f"    [Coder {coder_id}] ✗ {fix_result.error}")
+            try:
+                fixed_code = coder.fix_error(structure, current_code, current_error)
+            except Exception as e:
+                print(f"    [Coder {coder_id}] x {e}")
                 # 修復失敗，直接傳給下一個 Coder（不更新 current_code）
                 continue
             
-            fixed_code = fix_result.data.code
+            fixed_code_obj = fixed_code
             
             # 嘗試渲染
-            render_result = self.executor.render(fixed_code, output_name=f"_fix_{attempt}")
+            render_result = self.executor.render(fixed_code_obj.code, output_name=f"_fix_{attempt}")
             
             if render_result.success:
-                print(f"    [Coder {coder_id}] ✓ Fixed!")
-                return True, fix_result.data
+                print(f"    [Coder {coder_id}] v Fixed!")
+                return True, fixed_code_obj
             
             # 渲染失敗，把結果傳給下一個 Coder
-            print(f"    [Coder {coder_id}] ✗ Still error, passing to next...")
-            current_code = fixed_code
+            print(f"    [Coder {coder_id}] x Still error, passing to next...")
+            current_code = fixed_code_obj.code
             current_error = self._extract_error_message(render_result.error)
         
-        print(f"    ⚠ Max attempts ({max_attempts}) reached")
+        print(f"    x Max attempts ({max_attempts}) reached")
         return False, None
     
     def run(
@@ -137,16 +141,16 @@ class ChartLoop:
         
         # Step 1: Design
         print("\n[Step 1] Designing chart structure...")
-        design_result = self.designer.execute(user_request)
         
-        if not design_result.success:
-            return ChartResult(success=False, error=f"Design failed: {design_result.error}")
+        try:
+            design_data = self.designer.execute(user_request)
+            tpa: TPAAnalysis = design_data["tpa"]
+            structure: StructureLogic = design_data["structure"]
+        except Exception as e:
+            return ChartResult(success=False, error=f"Design failed: {e}")
         
-        tpa: TPAAnalysis = design_result.data["tpa"]
-        structure: StructureLogic = design_result.data["structure"]
-        
-        print(f"  ✓ TPA: {tpa.task_type}")
-        print(f"  ✓ Structure: {structure.node_count} nodes, {structure.edge_count} edges")
+        print(f"  v TPA: {tpa.task_type}")
+        print(f"  v Structure: {structure.node_count} nodes, {structure.edge_count} edges")
         
         current_code: Optional[MermaidCode] = None
         current_feedback: Optional[VisualFeedback] = None
@@ -164,26 +168,24 @@ class ChartLoop:
             # Step 2: Generate/Revise Code（每次用全新 Coder）
             coder = self._create_coder("A")
             
-            if current_code is None:
-                print("  [Step 2] Generating Mermaid code...")
-                code_result = coder.generate(structure)
-            else:
-                print("  [Step 2] Revising code based on feedback...")
-                code_result = coder.revise(structure, current_code.code, current_feedback)
-            
-            if not code_result.success:
-                print(f"  ✗ Code generation failed: {code_result.error}")
+            try:
+                if current_code is None:
+                    print("  [Step 2] Generating Mermaid code...")
+                    current_code = coder.generate(structure)
+                else:
+                    print("  [Step 2] Revising code based on feedback...")
+                    current_code = coder.revise(structure, current_code.code, current_feedback)
+                print(f"  v Code generated")
+            except Exception as e:
+                print(f"  x Code generation failed: {e}")
                 current_feedback = VisualFeedback(
                     is_approved=False,
                     feedback_type=FeedbackType.OTHER,
-                    issues=[f"Code error: {code_result.error}"],
+                    issues=[f"Code error: {e}"],
                     suggestions=["Simplify the structure"]
                 )
                 feedback_history.append(current_feedback)
                 continue
-            
-            current_code = code_result.data
-            print(f"  ✓ Code generated")
             
             # Step 3: Render
             print("  [Step 3] Rendering to PNG...")
@@ -192,7 +194,7 @@ class ChartLoop:
             
             if not render_result.success:
                 short_error = self._extract_error_message(render_result.error)
-                print(f"  ✗ Render failed: {short_error}")
+                print(f"  x Render failed: {short_error}")
                 
                 # 嘗試 ping-pong 修復
                 if self.use_dual_coder:
@@ -207,7 +209,7 @@ class ChartLoop:
                             visual_iterations += 1
                             final_image_path = render_result.image_path
                             final_image_base64 = render_result.image_base64
-                            print(f"  ✓ Rendered: {final_image_path}")
+                            print(f"  v Rendered: {final_image_path}")
                         else:
                             current_feedback = VisualFeedback(
                                 is_approved=False,
@@ -239,7 +241,7 @@ class ChartLoop:
                 visual_iterations += 1
                 final_image_path = render_result.image_path
                 final_image_base64 = render_result.image_base64
-                print(f"  ✓ Rendered: {final_image_path}")
+                print(f"  v Rendered: {final_image_path}")
             
             # Step 4: CHARTAF Inspection
             if skip_inspection:
@@ -247,33 +249,29 @@ class ChartLoop:
                 break
             
             print("  [Step 4] CHARTAF evaluation...")
-            inspect_result = self.chartaf.evaluate(
-                user_request=user_request,
-                tpa=tpa,
-                mermaid_code=current_code.code,
-                image_base64=final_image_base64
-            )
             
-            if not inspect_result.success:
-                print(f"  ⚠ Evaluation failed: {inspect_result.error}")
+            try:
+                current_feedback = self.chartaf.evaluate(
+                    user_request=user_request,
+                    tpa=tpa,
+                    mermaid_code=current_code.code,
+                    image_base64=final_image_base64
+                )
+                feedback_history.append(current_feedback)
+            except Exception as e:
+                print(f"  x Evaluation failed: {e}")
                 break
-            
-            current_feedback = inspect_result.data
-            feedback_history.append(current_feedback)
-            
-            score = inspect_result.metadata.get("score", 0.0)
-            print(f"  📊 Score: {score:.2f}")
             
             if current_feedback.is_approved:
-                print("  ✓ Approved!")
+                print("  v Approved!")
                 break
             else:
-                print(f"  ✗ Issues: {current_feedback.feedback_type.value}")
+                print(f"  x Issues: {current_feedback.feedback_type.value}")
                 for issue in current_feedback.issues[:2]:
                     print(f"    - {issue}")
                 
                 if self._is_repeated_feedback(feedback_history):
-                    print("  ⚠ Repeated issues, accepting...")
+                    print("  > Repeated issues, accepting...")
                     break
         
         # 結果
@@ -307,17 +305,17 @@ class ChartLoop:
         return result
     
     def _copy_to_output(self, source_path: str, output_name: Optional[str]) -> Path:
-        """複製圖片到 output_dir"""
+        """複製結果到 output_dir"""
         source = Path(source_path)
         dest_name = f"{output_name}{source.suffix}" if output_name else source.name
         dest = self.output_dir / dest_name
         ensure_dir(self.output_dir)
         shutil.copy2(source, dest)
-        print(f"  ✓ Saved: {dest}")
+        print(f"  v Saved: {dest}")
         return dest
     
     def _save_session_log(self, result: ChartResult, user_request: str):
-        """儲存 session 日誌"""
+        """保存 session 紀錄"""
         if not self._session_id:
             return
         
@@ -353,7 +351,7 @@ class ChartLoop:
         return error.split('\n')[0][:100] or "Unknown error"
     
     def _is_repeated_feedback(self, history: List[VisualFeedback]) -> bool:
-        """檢查是否重複相同問題"""
+        """檢查是否重複反饋"""
         if len(history) < 2:
             return False
         
@@ -364,3 +362,4 @@ class ChartLoop:
             overlap = len(last & prev) / max(len(last), len(prev))
             return overlap > 0.6
         return False
+

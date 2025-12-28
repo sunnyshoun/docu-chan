@@ -4,12 +4,11 @@ Agents module for Doc Generator
 包含四個主要模組：
 - project_analyzer: 專案分析（Phase 1）
 - doc_planner: 文檔規劃（Phase 2）
-- doc_generator: 文檔生成（Phase 3）
+- doc_generator: 內容生成（Phase 3）
 - packer: 打包發布（Phase 4）
 """
 
-from .context import AgentContext, LLMResponse
-from .base import BaseAgent, AgentResult
+from .base import BaseAgent
 
 # Project Analyzer
 from .project_analyzer import ProjectAnalyzer
@@ -24,12 +23,8 @@ from .doc_generator import DocWriter, ChartLoop
 from .packer import Packer
 
 __all__ = [
-    # Context
-    "AgentContext",
-    "LLMResponse",
     # Base
     "BaseAgent",
-    "AgentResult",
     # Phase 1: Understanding
     "ProjectAnalyzer",
     # Phase 2: Planning
@@ -40,3 +35,4 @@ __all__ = [
     # Phase 4: Packaging
     "Packer",
 ]
+

@@ -10,11 +10,12 @@ import sys
 import argparse
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from config.settings import load_config
-from agents.context import AgentContext
+from config import config, load_config
 from agents import ChartLoop
 
 
@@ -33,13 +34,10 @@ def main():
     print("  (Phase 3: Chart Generation)")
     print("=" * 50)
     
-    # 載入設定並初始化共用 Context
+    # 載入設定
     try:
-        config = load_config()
-        AgentContext.initialize(
-            api_key=config.api_key,
-            base_url=config.api_base_url
-        )
+        load_dotenv()
+        load_config()  # 載入並驗證設定
     except Exception as e:
         print(f"\n[Error] Failed to initialize: {e}")
         print("Please set API_KEY and API_BASE_URL in .env file")
@@ -52,10 +50,7 @@ def main():
         
         chart_loop = ChartLoop(
             log_dir=str(config.chart.log_dir),
-            output_dir=str(config.chart.output_dir) if not args.output else args.output,
-            designer_model=config.models.diagram_designer,
-            coder_model=config.models.mermaid_coder,
-            evaluator_model=config.models.visual_inspector
+            output_dir=args.output or str(config.chart.output_dir)
         )
         result = chart_loop.run(
             args.chart, 

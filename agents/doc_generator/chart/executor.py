@@ -21,7 +21,7 @@ class RenderResult:
 
 
 class CodeExecutor:
-    """Mermaid 代碼執行器 (需要: npm install -g @mermaid-js/mermaid-cli)"""
+    """Mermaid 代碼執行器 (需要 npm install -g @mermaid-js/mermaid-cli)"""
     
     DEFAULT_TIMEOUT = 60
     
@@ -69,7 +69,7 @@ class CodeExecutor:
         output_path = self.output_dir / f"{output_name}.{format}"
         ensure_dir(output_path.parent)
         
-        # 建立暫存 .mmd 檔案
+        # 建立臨時 .mmd 檔案
         temp_mmd = self.output_dir / f"_temp_{uuid.uuid4().hex[:8]}.mmd"
         
         try:
@@ -85,7 +85,7 @@ class CodeExecutor:
                 "-i", str(temp_mmd),
                 "-o", str(output_path),
                 "-b", "transparent",
-                "-s", "4"  # 放大 4 倍提高解析度
+                "-s", "4"  # 放大 4 倍取得高解析度
             ]
             
             result = subprocess.run(
@@ -122,7 +122,7 @@ class CodeExecutor:
         except Exception as e:
             return RenderResult(success=False, error=str(e))
         # finally:
-        #     # 清理暫存檔
+        #     # 清理臨時檔案
         #     if temp_mmd.exists():
         #         temp_mmd.unlink()
     
@@ -138,3 +138,4 @@ class CodeExecutor:
     def check_installation() -> bool:
         """檢查 mermaid-cli 是否已安裝"""
         return shutil.which("mmdc") is not None or shutil.which("mmdc.cmd") is not None
+

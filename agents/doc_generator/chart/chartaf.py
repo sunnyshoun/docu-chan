@@ -6,11 +6,11 @@ CHARTAF - Chart Auto-Feedback System
 - 強調圖表結構檢查（流程圖需由上而下有序）
 - 生成 Granular Feedback (RETAIN/EDIT/DISCARD/ADD)
 """
-import json
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
-from agents.base import BaseAgent, AgentResult
+from config.settings import get_config
+from agents.base import BaseAgent
 from models import VisualFeedback, FeedbackType, TPAAnalysis
 from utils.image_utils import encode_image_base64
 
@@ -66,17 +66,18 @@ class ChartAF(BaseAgent):
     
     def __init__(
         self,
-        vlm_model: str = "gemma3:4b",
-        evaluator_model: str = "gpt-oss:20b"
+        vlm_model: Optional[str] = None,
+        evaluator_model: Optional[str] = None
     ):
+        config = get_config()
         super().__init__(
             name="ChartAF",
-            model=vlm_model,
-            use_thinking=False  # VLM 不支援 thinking
+            model=vlm_model or config.models.visual_inspector,
+            think=False  # VLM 不支援 thinking
         )
-        self.vlm_model = vlm_model
-        self.evaluator_model = evaluator_model
-        self._history: List[ChartAFResult] = []
+        self.vlm_model = vlm_model or config.models.visual_inspector
+        self.evaluator_model = evaluator_model or config.models.diagram_designer
+        self._eval_history: List[ChartAFResult] = []
     
     def evaluate(
         self,
@@ -85,7 +86,7 @@ class ChartAF(BaseAgent):
         mermaid_code: str,
         image_path: Optional[str] = None,
         image_base64: Optional[str] = None
-    ) -> AgentResult:
+    ) -> VisualFeedback:
         """
         執行 CHARTAF 評估流程
         
@@ -97,57 +98,119 @@ class ChartAF(BaseAgent):
             image_base64: Base64 編碼的圖片 (二選一)
         
         Returns:
-            AgentResult with VisualFeedback
+            VisualFeedback: 視覺反饋
         """
         # 讀取圖片
         if image_base64 is None and image_path:
-            try:
-                image_base64 = encode_image_base64(image_path)
-            except Exception as e:
-                return AgentResult(success=False, data=None, error=f"Failed to read image: {e}")
+            image_base64 = encode_image_base64(image_path)
         
         if image_base64 is None:
-            return AgentResult(success=False, data=None, error="No image provided")
+            raise ValueError("No image provided")
         
-        try:
-            # Step 1: VLM 直接評估圖片（回答二元問題）
-            self._log("Evaluating chart with VLM (binary questions)...")
-            eval_result = self._evaluate_with_vlm(tpa, mermaid_code, image_base64)
+        # Step 1: VLM 直接評估圖片（回答二元問題）
+        self.log("Evaluating chart with VLM (binary questions)...")
+        eval_result = self._evaluate_with_vlm(tpa, mermaid_code, image_base64)
+        
+        score = eval_result.get("score", 0.0)
+        is_approved = score >= self.APPROVAL_THRESHOLD
+        
+        self.log(f"Evaluation score: {score:.2f}, approved: {is_approved}")
+        
+        # Step 2: 生成 Granular Feedback
+        self.log("Generating granular feedback...")
+        feedback = self._generate_feedback(
+            user_request, mermaid_code, eval_result, is_approved
+        )
+        
+        # 組合結果並記錄
+        chartaf_result = ChartAFResult(
+            score=score,
+            is_approved=is_approved,
+            evaluations=self._parse_evaluations(eval_result),
+            feedback=feedback,
+            raw_data=eval_result
+        )
+        self._eval_history.append(chartaf_result)
+        
+        # 印出詳細評估結果
+        self._print_evaluation_report(chartaf_result, eval_result)
+        
+        return feedback
+    
+    def _print_evaluation_report(
+        self,
+        result: ChartAFResult,
+        raw_eval: Dict[str, Any]
+    ) -> None:
+        """印出詳細的評估報告"""
+        print("\n" + "=" * 60)
+        print("  CHARTAF Evaluation Report")
+        print("=" * 60)
+        
+        # 總分
+        status = "APPROVED" if result.is_approved else "NEEDS REVISION"
+        symbol = "[v]" if result.is_approved else "[x]"
+        print(f"\n  Score: {result.score:.2f} / 1.00  {symbol} {status}")
+        print(f"  Threshold: {self.APPROVAL_THRESHOLD}")
+        
+        # 各項評估
+        print("\n  Evaluation Details:")
+        print("  " + "-" * 56)
+        
+        for item in raw_eval.get("evaluations", []):
+            q_id = item.get("id", "?")
+            category = item.get("category", "unknown").upper()
+            answer = item.get("answer", "?")
+            question = item.get("question", "")
             
-            score = eval_result.get("score", 0.0)
-            is_approved = score >= self.APPROVAL_THRESHOLD
+            # 截斷問題文字
+            if len(question) > 35:
+                question = question[:35] + "..."
             
-            self._log(f"Evaluation score: {score:.2f}, approved: {is_approved}")
+            # 根據答案選擇符號
+            if answer.upper() == "YES":
+                mark = "[v]"
+                answer_text = "YES"
+            else:
+                mark = "[x]"
+                answer_text = "NO"
             
-            # Step 2: 生成 Granular Feedback
-            self._log("Generating granular feedback...")
-            feedback = self._generate_feedback(
-                user_request, mermaid_code, eval_result, is_approved
-            )
+            print(f"  [{q_id}] {mark} [{category:10}] {question:<38} -> {answer_text}")
             
-            # 組合結果
-            chartaf_result = ChartAFResult(
-                score=score,
-                is_approved=is_approved,
-                evaluations=self._parse_evaluations(eval_result),
-                feedback=feedback,
-                raw_data=eval_result
-            )
+            # 如果是 NO，顯示問題和建議
+            if answer.upper() == "NO":
+                issue = item.get("issue", "")
+                fix = item.get("fix", "")
+                if issue:
+                    issue_text = issue[:55] + "..." if len(issue) > 55 else issue
+                    print(f"       Issue: {issue_text}")
+                if fix:
+                    fix_text = fix[:55] + "..." if len(fix) > 55 else fix
+                    print(f"       Fix:   {fix_text}")
+        
+        # 總結
+        summary = raw_eval.get("summary", "")
+        if summary:
+            print(f"\n  Summary: {summary}")
+        
+        # 最終反饋（僅當不通過時）
+        if not result.is_approved:
+            print("\n  Feedback to Coder:")
+            print("  " + "-" * 56)
             
-            self._history.append(chartaf_result)
+            if result.feedback.issues:
+                print("  Issues:")
+                for i, issue in enumerate(result.feedback.issues[:3], 1):
+                    issue_text = issue[:65] + "..." if len(issue) > 65 else issue
+                    print(f"    {i}. {issue_text}")
             
-            return AgentResult(
-                success=True,
-                data=feedback,
-                metadata={
-                    "chartaf_result": chartaf_result,
-                    "score": score
-                }
-            )
-            
-        except Exception as e:
-            self._log(f"CHARTAF evaluation failed: {e}", level="error")
-            return AgentResult(success=False, data=None, error=str(e))
+            if result.feedback.suggestions:
+                print("  Suggestions:")
+                for i, sug in enumerate(result.feedback.suggestions[:3], 1):
+                    sug_text = sug[:65] + "..." if len(sug) > 65 else sug
+                    print(f"    {i}. {sug_text}")
+        
+        print("\n" + "=" * 60 + "\n")
     
     def _evaluate_with_vlm(
         self,
@@ -156,21 +219,18 @@ class ChartAF(BaseAgent):
         image_base64: str
     ) -> Dict[str, Any]:
         """VLM 直接看圖回答二元問題"""
-        tpa_json = json.dumps(tpa.to_dict(), ensure_ascii=False, indent=2)
-        
-        response = self._call_llm(
+        response = self.chat(
             prompt_name=self.PROMPT_EVALUATE,
             variables={
-                "tpa_analysis": tpa_json,
+                "tpa_analysis": tpa.to_dict(),
                 "diagram_type": tpa.task_type,
                 "mermaid_code": mermaid_code
             },
-            model=self.vlm_model,
             images=[image_base64],
-            thinking=False
+            keep_history=False  # 評估不需要保留歷史
         )
         
-        return self._parse_json_response(response.content)
+        return self.parse_json(response.message.content)
     
     def _generate_feedback(
         self,
@@ -238,14 +298,15 @@ class ChartAF(BaseAgent):
         image_base64: str
     ) -> float:
         """CHARTAF-S: 只取得分數"""
-        result = self.evaluate(user_request, tpa, mermaid_code, image_base64=image_base64)
-        if result.success:
-            return result.metadata.get("score", 0.0)
+        feedback = self.evaluate(user_request, tpa, mermaid_code, image_base64=image_base64)
+        if self._eval_history:
+            return self._eval_history[-1].score
         return 0.0
     
     @property
-    def history(self) -> List[ChartAFResult]:
-        return self._history.copy()
+    def eval_history(self) -> List[ChartAFResult]:
+        return self._eval_history.copy()
     
-    def clear_history(self):
-        self._history.clear()
+    def clear_eval_history(self) -> None:
+        self._eval_history.clear()
+

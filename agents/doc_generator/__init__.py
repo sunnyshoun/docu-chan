@@ -1,7 +1,7 @@
 """
 Doc Generator Module (Phase 3)
 
-負責文檔生成：
+負責內容生成：
 - chart/: Mermaid 圖表生成迴圈
 - document/: 技術文檔撰寫
 """
@@ -18,7 +18,7 @@ __all__ = [
     "DiagramDesigner",
     "MermaidCoder",
     "CodeExecutor",
-    "VisualInspector",
     # Document
     "DocWriter",
 ]
+
