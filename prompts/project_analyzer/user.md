@@ -1,0 +1,1 @@
+Aim to text files, binary files may be marked as not important.  According to the file, summarize the logic, behaviors, dataflow, etc.

@@ -8,7 +8,9 @@ import json
 import re
 import logging
 from abc import ABC
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional, Union
+
+from ollama import ChatResponse
 
 from .client import get_client, get_async_client
 from .prompts import format_prompt, get_prompt_params
@@ -126,10 +128,10 @@ class BaseAgent(ABC):
     def chat_raw(
         self,
         messages: list[dict[str, Any]],
-        tools: Optional[list[dict]] = None,
+        tools: Optional[list[Mapping[str, Any] | Callable]] = None,
         format: Optional[str | dict] = None,
         keep_history: bool = False
-    ):
+    ) -> ChatResponse:
         """
         直接傳入 messages 呼叫（不使用 prompt template）
         
@@ -147,7 +149,6 @@ class BaseAgent(ABC):
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": all_messages,
-            "stream": False,
         }
         
         if self.think:
@@ -157,17 +158,13 @@ class BaseAgent(ABC):
         if format:
             kwargs["format"] = format
         
-        response = get_client().chat(**kwargs)
+        response = get_client().chat(stream=False, **kwargs)
         
         if keep_history:
             self.messages.extend(messages)
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": response.message.content or ""
-            }
-            if response.message.tool_calls:
-                assistant_msg["tool_calls"] = response.message.tool_calls
-            self.messages.append(assistant_msg)
+            keys_to_keep = ["role", "content", "tool_calls"]
+            assistant_msg = response.message.model_dump()
+            self.messages.append({key: assistant_msg[key] for key in keys_to_keep if key in assistant_msg})
         
         return response
     
