@@ -1,11 +1,10 @@
 """
 File utility functions for Doc Generator
 """
-import os
+import chardet
+import git
 from pathlib import Path
 from typing import List, Optional, Union
-import pathspec
-import chardet
 
 
 def ensure_dir(path: Union[str, Path]) -> Path:
@@ -130,8 +129,8 @@ class FileNode:
     confidence: Optional[float]
     children: List['FileNode']
     error: Optional[str]
-    def __init__(self, path: str, *, sample_size=1024, significance = 0.95):
-        self.path = path
+    def __init__(self, path: str|Path, *, sample_size=10240, significance = 0.95):
+        self.path = Path(path).as_posix()
         self.name = ""
         self.is_dir = False
         self.is_text = None
@@ -160,6 +159,15 @@ class FileNode:
 
     def _detect_encoding(self, sample_size, significance):
         try:
+            read_file(self.path)
+            self.is_text = True
+            self.encoding = "utf-8"
+            self.confidence = 1.0
+            return
+        except UnicodeDecodeError:
+            pass
+
+        try:
             with open(self.path, 'rb') as f:
                 raw_data = f.read(sample_size)
 
@@ -172,7 +180,7 @@ class FileNode:
                 self.is_text = True
             else:
                 self.is_text = False
-                self.encoding = "Unknown"
+                self.encoding = f"likely {result['encoding']}"
             
         except PermissionError:
             self.error = "Permission Denied (Read Content)"
@@ -184,7 +192,7 @@ class FileNode:
     def __repr__(self):
         status = f" [ERR: {self.error}]" if self.error else ""
         type_str = 'Dir' if self.is_dir else 'File'
-        return f"<{type_str}: {self.name}{status}, text_encoding:{self.encoding}>"
+        return f"<{type_str}: {self.name}{status}, text_encoding:{self.encoding}, p={self.confidence}>"
     
     def to_dict(self):
         # 1. 建立基本資訊
@@ -223,38 +231,45 @@ class FileNode:
 
 def build_file_tree(
     root_path: str, 
-    search_hidden: bool = False, 
-    parent_patterns: Optional[List[str]] = None
+    search_hidden: bool = False,
+    chunk_size: int = 400
 ) -> Optional[FileNode]:
     path_obj = Path(root_path)
-
     if not path_obj.exists():
         return None
+    
+    repo = git.Repo(path_obj, search_parent_directories=True)
+    all_files = [str(p) for p in path_obj.rglob('*') if p.is_file()]
+    ignored_files = []
+    for i in range(0, len(all_files), chunk_size):
+        ignored_files.extend(repo.ignored(*all_files[i:i+chunk_size]))
 
-    node = FileNode(path_obj.as_posix())
-    current_patterns = parent_patterns.copy() if parent_patterns else []
-    gitignore_path = path_obj / ".gitignore"
-    if gitignore_path.exists() and gitignore_path.is_file():
-        try:
-            new_patterns = read_file(gitignore_path)
-            current_patterns.extend(new_patterns)
-        except Exception as e:
-            print(f"無法讀取 .gitignore: {e}")
+    node = build_nodes(path_obj, search_hidden=search_hidden, ignored_files=ignored_files)
 
-    spec = pathspec.PathSpec.from_lines('gitwildmatch', current_patterns)
+    return node
 
+def build_nodes(
+    path: str|Path,
+    search_hidden: bool = False,
+    ignored_files: list[str] = []
+) -> Optional[FileNode]:
+    path_obj = Path(path)
+    if not path_obj.exists():
+        return None
+    if path in ignored_files:
+        return None
+    
+    node = FileNode(path_obj)
     if node.is_dir:
         try:
             for item in path_obj.iterdir():
                 if not search_hidden and item.name.startswith('.') and item.name != ".gitignore":
                     continue
-                if spec.match_file(item.name):
-                    continue
-            
-                child_node = build_file_tree(
+
+                child_node = build_nodes(
                     str(item), 
                     search_hidden=search_hidden, 
-                    parent_patterns=current_patterns
+                    ignored_files=ignored_files
                 )
                 
                 if child_node:
@@ -263,6 +278,9 @@ def build_file_tree(
         except PermissionError:
             node.error = "Permission Denied"  # 假設 FileNode 有 error 欄位
         except Exception as e:
-            print(f"讀取錯誤 {node.path}: {e}")
 
+            print(f"讀取錯誤 {node.path}: {e}")
+        if len(node.children) == 0:
+            return None
+        
     return node
