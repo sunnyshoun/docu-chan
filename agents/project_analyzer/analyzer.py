@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from config.settings import get_config
 from agents.base import BaseAgent
-from agents.client import get_client
+from agents.project_analyzer.picture_analyzer import PictureAnalyzer
 from agents.project_analyzer.tool_docs import TOOL_DOCS
 from utils import file_utils
 
@@ -20,6 +20,7 @@ class ProjectAnalyzer(BaseAgent):
     file_nodes: list[file_utils.FileNode]
     system_prompt: str
     user_prompt_base: str
+    pic_analyzer: PictureAnalyzer
     dumps = []
     report = {}
     dump_file: str
@@ -44,16 +45,19 @@ class ProjectAnalyzer(BaseAgent):
         self.root_parent = Path(root_dir).parent.as_posix()
         _file_tree = file_utils.build_file_tree(Path(root_dir).as_posix())
         if not _file_tree:
-            raise FileNotFoundError("no file tree build")
+            raise FileNotFoundError("no file tree built")
         
         self.file_nodes = _file_tree.to_list()
         files = "\n".join([f"{node.relative_to(self.root_parent)}: {node}" for node in self.file_nodes])
+
+        self.pic_analyzer = PictureAnalyzer(self.root_parent, Path(prompt_dir) / "picture.md")
 
         self.system_prompt = file_utils.read_file(Path(prompt_dir) / "system.md") + files
         self.user_prompt_base = file_utils.read_file(Path(prompt_dir) / "user.md")
 
         self._implements = {
             "read_file": self.read_file,
+            "get_image_description": self.pic_analyzer.get_image_description,
             "report_summary": self.report_summary
         }
 
@@ -64,9 +68,8 @@ class ProjectAnalyzer(BaseAgent):
         print(f"path: {path}, open: {abs_path}")
         raw_data = b""
         try:
-            with open(abs_path, 'rb') as f:
-                raw_data = f.read()
-                return raw_data.decode('utf-8')
+            raw_data = abs_path.read_bytes()
+            return raw_data.decode('utf-8')
         except FileNotFoundError:
             return "error: no such file"
         except UnicodeDecodeError:
@@ -130,8 +133,7 @@ class ProjectAnalyzer(BaseAgent):
     def load_report(self):
         if not Path(self.report_file).exists():
             return
-        with open(self.report_file, "r") as f:
-            self.report = json.load(f)
+        self.report = json.loads(file_utils.read_file(self.report_file))
         
 
     def start(self, recovery_run = False, max_retries: int = 3):
