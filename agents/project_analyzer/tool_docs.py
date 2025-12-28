@@ -26,3 +26,12 @@ def report_summary(path: str, is_important: bool, summary: str) -> None:
         summary: The summary of this file.
     """
     ...
+
+@tool_doc_register
+def get_image_description(image_path: str) -> str:
+    """
+    Use this function to get description of image.
+    Args:
+        image_path: path of the image.
+    """
+    ...
