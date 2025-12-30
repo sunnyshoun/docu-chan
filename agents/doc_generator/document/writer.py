@@ -1,59 +1,417 @@
 """
 Doc Writer
 
-技術文檔撰寫與審核。
-支援 Tool Calling，可自主讀取檔案來補充 Planner 指引不足的資訊。
+技術文檔設計與撰寫。
+整合了原本的 DocDesigner 功能，可以根據 DocTodo 自主讀取檔案、設計文檔結構並撰寫內容。
+減少 Designer->Writer 的額外步驟，直接讓 Writer 邊設計邊寫文件。
 """
 import json
 from typing import Dict, Any, Optional, List
+from dataclasses import dataclass, field
 
-from config.settings import get_config
+from config.agents import AgentName
 from agents.base import BaseAgent
 from models import DocPlan, DocumentTask
 from tools import get_tools, execute
 from tools.file_ops import set_project_root
 
 
+@dataclass
+class SectionSpec:
+    """章節規格"""
+    title: str
+    content_type: str  # overview, api_reference, code_example, etc.
+    description: str
+    key_points: List[str] = field(default_factory=list)
+    source_files: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "title": self.title,
+            "content_type": self.content_type,
+            "description": self.description,
+            "key_points": self.key_points,
+            "source_files": self.source_files
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SectionSpec":
+        return cls(
+            title=data.get("title", ""),
+            content_type=data.get("content_type", "general"),
+            description=data.get("description", ""),
+            key_points=data.get("key_points", []),
+            source_files=data.get("source_files", [])
+        )
+
+
 class DocWriter(BaseAgent):
     """
-    文件撰寫器
+    文件撰寫器（整合設計功能）
     
     職責：
-    - 接收 Planner 的 DocumentTask（包含指引和建議）
-    - 根據指引自主讀取檔案來收集資訊
-    - 撰寫技術文檔各章節
+    - 接收 Planner 的 DocTodo
+    - 根據 DocTodo 自主讀取檔案來收集資訊
+    - 設計文檔結構
+    - 撰寫技術文檔
     - 審核文件品質
     
-    工作流程：
-    1. gather_context(): 根據 task 的指引讀取相關檔案
-    2. write_document(): 撰寫文檔
-    3. review(): 審核並修正
+    支援兩種入口：
+    1. execute_from_todo: 從 DocTodo 開始（新流程，整合設計+撰寫）
+    2. execute_from_task: 從 DocumentTask 開始（舊流程，保持相容）
     """
     
     PROMPT_WRITE = "doc_generator/tech_writer"
     PROMPT_REVIEW = "doc_generator/doc_reviewer"
-    PROMPT_GATHER = "doc_generator/writer_gather"
     
-    MAX_TOOL_ITERATIONS = 5
+    MAX_TOOL_ITERATIONS = 8
     
-    def __init__(
-        self,
-        writer_model: Optional[str] = None,
-        reviewer_model: Optional[str] = None,
-        project_path: Optional[str] = None
-    ):
-        config = get_config()
+    def __init__(self, project_path: Optional[str] = None):
         super().__init__(
-            name="DocWriter",
-            model=writer_model or config.models.tech_writer,
-            think=False
+            agent_name=AgentName.TECH_WRITER,
+            display_name="DocWriter"
         )
-        self.writer_model = writer_model or config.models.tech_writer
-        self.reviewer_model = reviewer_model or config.models.doc_reviewer
         self._gathered_context: Dict[str, Any] = {}
+        self._project_path = project_path
         
         if project_path:
             set_project_root(project_path)
+    
+    def execute_from_todo(
+        self,
+        todo,  # DocTodo from doc_planner
+        report: Dict[str, Any],
+        project_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        從 DocTodo 執行完整設計+撰寫流程（整合設計功能）
+        
+        Args:
+            todo: Planner 產生的 DocTodo
+            report: Phase 1 的 report.json
+            project_path: 專案路徑
+            
+        Returns:
+            dict: 包含 content, gathered_context, sections
+        """
+        if project_path:
+            self._project_path = project_path
+            set_project_root(project_path)
+        
+        self.log(f"Processing: {todo.title}")
+        
+        # Step 1: 收集上下文（使用 Tool Calling）
+        self.log("Gathering context from source files...")
+        gathered = self._gather_context_from_todo(todo, report)
+        self._gathered_context = gathered
+        
+        # Step 2: 設計+撰寫（一次完成）
+        self.log("Designing and writing document...")
+        content = self._design_and_write(todo, gathered, report)
+        
+        # 驗證 content 不為空
+        if not content or not content.strip():
+            self.log("Warning: Generated content is empty, retrying...")
+            content = self._design_and_write(todo, gathered, report)
+        
+        if not content or not content.strip():
+            raise ValueError(f"Failed to generate content for: {todo.title}")
+        
+        # Step 3: 審核（傳入 todo 和 report 以檢查是否滿足需求）
+        self.log("Reviewing document...")
+        reviewed_content = self.review(content, todo=todo, report=report)
+        
+        # 確保審核後內容不為空
+        if not reviewed_content or not reviewed_content.strip():
+            self.log("Warning: Reviewed content is empty, using original content")
+            reviewed_content = content
+        
+        return {
+            "content": reviewed_content,
+            "raw_content": content,
+            "gathered_context": gathered,
+            "todo": todo.to_dict()
+        }
+    
+    def _gather_context_from_todo(
+        self,
+        todo,  # DocTodo
+        report: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """使用 Tool Calling 收集文件所需上下文"""
+        gathered = {
+            "files_read": [],
+            "content_snippets": {},
+            "classes_found": [],
+            "functions_found": [],
+            "api_definitions": [],
+            "key_info": []
+        }
+        
+        # 建立收集 prompt
+        gather_prompt = self._build_gather_prompt_from_todo(todo, report)
+        
+        messages = [
+            {"role": "system", "content": self._get_gather_system_prompt()},
+            {"role": "user", "content": gather_prompt}
+        ]
+        
+        for iteration in range(self.MAX_TOOL_ITERATIONS):
+            response = self.chat_raw(
+                messages=messages,
+                tools=get_tools("read_file", "search_in_file", "list_directory"),
+                keep_history=False
+            )
+            
+            if not response.message.tool_calls:
+                # 嘗試從最後回應提取 key_info
+                try:
+                    final_content = response.message.content or ""
+                    if "key_info" in final_content.lower():
+                        info_data = self.parse_json(final_content)
+                        gathered["key_info"] = info_data.get("key_info", [])
+                except:
+                    pass
+                self.log(f"  Context gathering complete after {iteration + 1} iterations")
+                break
+            
+            # 處理 tool calls
+            for tool_call in response.message.tool_calls:
+                tool_name = tool_call.function.name
+                try:
+                    arguments = json.loads(tool_call.function.arguments) \
+                        if isinstance(tool_call.function.arguments, str) \
+                        else tool_call.function.arguments
+                except json.JSONDecodeError:
+                    arguments = {}
+                
+                self.log(f"  Tool: {tool_name}")
+                
+                try:
+                    result = execute(tool_name, **arguments)
+                    result_str = str(result)
+                except Exception as e:
+                    result_str = f"error: {e}"
+                
+                # 記錄讀取的檔案和提取資訊
+                if tool_name == "read_file":
+                    file_path = arguments.get("file_path", "unknown")
+                    gathered["files_read"].append(file_path)
+                    gathered["content_snippets"][file_path] = result_str[:2000]
+                    # 提取程式碼元素
+                    self._extract_code_elements(result_str, gathered)
+                
+                # 更新對話歷史
+                messages.append({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [tool_call]
+                })
+                messages.append({
+                    "role": "tool",
+                    "content": result_str[:3000]
+                })
+        
+        return gathered
+    
+    def _extract_code_elements(self, content: str, gathered: Dict[str, Any]):
+        """從程式碼中提取 classes 和 functions"""
+        import re
+        
+        # Python class
+        class_pattern = r'class\s+(\w+)(?:\(([^)]*)\))?:'
+        for match in re.finditer(class_pattern, content):
+            class_name = match.group(1)
+            bases = match.group(2) or ""
+            gathered["classes_found"].append({
+                "name": class_name,
+                "bases": [b.strip() for b in bases.split(",") if b.strip()]
+            })
+        
+        # Python function
+        func_pattern = r'def\s+(\w+)\s*\(([^)]*)\)(?:\s*->\s*([^:]+))?:'
+        for match in re.finditer(func_pattern, content):
+            func_name = match.group(1)
+            args = match.group(2)
+            returns = match.group(3) or "None"
+            gathered["functions_found"].append({
+                "name": func_name,
+                "args": [a.strip().split(":")[0].strip() for a in args.split(",") if a.strip()],
+                "returns": returns.strip()
+            })
+            gathered["api_definitions"].append({
+                "type": "function",
+                "name": func_name,
+                "args": [a.strip().split(":")[0].strip() for a in args.split(",") if a.strip()],
+                "returns": returns.strip()
+            })
+    
+    def _build_gather_prompt_from_todo(self, todo, report: Dict[str, Any]) -> str:
+        """建立收集資訊的 prompt"""
+        metadata = report.get("metadata", {})
+        entry_points = metadata.get('entry_points', [])
+        
+        parts = [
+            f"# Document Task: {todo.title}",
+            f"Type: {todo.doc_type}",
+            f"Description: {todo.description}",
+            "",
+            "## Project Context:",
+            f"Summary: {metadata.get('project_summary', 'N/A')[:500]}",
+            ""
+        ]
+        
+        # 強調 Entry Points
+        if entry_points:
+            parts.extend([
+                "## Entry Points (START HERE!):",
+                *[f"- **{ep}** ← Read this first to understand the main flow" for ep in entry_points],
+                ""
+            ])
+        
+        if todo.suggested_files:
+            parts.extend([
+                "## Suggested Files to Read:",
+                *[f"- {f}" for f in todo.suggested_files],
+                ""
+            ])
+        
+        if todo.outline:
+            parts.extend([
+                "## Outline (must cover all items):",
+                *[f"- {item}" for item in todo.outline],
+                ""
+            ])
+        
+        parts.extend([
+            "## Your Task:",
+            "1. **Start from entry points** to understand the application flow",
+            "2. Follow imports to understand module relationships",
+            "3. Use search_in_project to find specific patterns (e.g., config, API routes)",
+            "4. Gather information for ALL outline sections",
+            "5. When done, respond with a JSON containing key_info you found",
+            "",
+            "Stop when you have enough information for all outline sections."
+        ])
+        
+        return "\n".join(parts)
+    
+    def _get_gather_system_prompt(self) -> str:
+        """取得收集資訊的系統 prompt"""
+        return """You are a technical writer gathering information from source code.
+
+=== ANALYSIS STRATEGY ===
+
+**START FROM ENTRY POINTS:**
+1. Check report.json metadata for entry_points (e.g., main.py, app.py, Dockerfile)
+2. Read the entry point to understand the application's structure
+3. Follow imports to discover core modules and their purposes
+4. Use search tools to find specific patterns (configs, APIs, etc.)
+
+**TOOLS AVAILABLE:**
+- read_file: Read file content (start with entry points!)
+- search_in_file: Search for patterns in a specific file
+- list_directory: Explore folder structure
+
+**DOCUMENTATION STRATEGY:**
+1. Entry point → understand app initialization and main flow
+2. Config files → environment variables, settings
+3. Routes/APIs → endpoints, parameters, responses
+4. Services → business logic implementation
+5. Models → data structures
+
+**WHAT TO EXTRACT:**
+- Code examples (copy actual code, don't invent)
+- Function signatures with parameters
+- Configuration values and defaults
+- Setup and installation steps
+- API endpoints and their usage
+
+Be efficient - read entry points first, then follow the logical structure.
+When you have enough information for all outline sections, stop calling tools.
+
+At the end, summarize what you found in a JSON format with key_info array."""
+    
+    def _design_and_write(
+        self,
+        todo,  # DocTodo
+        gathered: Dict[str, Any],
+        report: Dict[str, Any]
+    ) -> str:
+        """設計並撰寫文檔（一步完成）"""
+        # 建立完整的 context
+        context = self._build_writing_context_from_gathered(todo, gathered, report)
+        
+        # 建立寫作 prompt
+        writing_data = {
+            "title": todo.title,
+            "doc_type": todo.doc_type,
+            "description": todo.description,
+            "outline": todo.outline,
+            "context": context
+        }
+        
+        response = self.chat(
+            prompt_name=self.PROMPT_WRITE,
+            variables={
+                "doc_plan": writing_data,
+                "section": writing_data
+            }
+        )
+        
+        content = response.message.content or ""
+        return content.strip()
+    
+    def _build_writing_context_from_gathered(
+        self,
+        todo,  # DocTodo
+        gathered: Dict[str, Any],
+        report: Dict[str, Any]
+    ) -> str:
+        """建立撰寫用的 context"""
+        parts = []
+        
+        # 專案摘要
+        metadata = report.get("metadata", {})
+        if metadata.get("project_summary"):
+            parts.append(f"## Project Summary:\n{metadata['project_summary'][:1000]}")
+            parts.append("")
+        
+        # 加入 API 定義
+        if gathered.get("api_definitions"):
+            parts.append("## API Reference:")
+            for api in gathered["api_definitions"][:20]:
+                if api["type"] == "function":
+                    args = ", ".join([a if isinstance(a, str) else a.get("name", "") for a in api.get("args", [])])
+                    parts.append(f"- `{api['name']}({args})` -> {api.get('returns', 'None')}")
+            parts.append("")
+        
+        # 加入 classes
+        if gathered.get("classes_found"):
+            parts.append("## Classes Found:")
+            for cls in gathered["classes_found"][:15]:
+                bases = ", ".join(cls.get("bases", []))
+                parts.append(f"- `{cls['name']}` (bases: {bases or 'None'})")
+            parts.append("")
+        
+        # 加入程式碼片段
+        if gathered.get("content_snippets"):
+            parts.append("## Code Snippets:")
+            for file_path, code in list(gathered["content_snippets"].items())[:3]:
+                parts.append(f"### {file_path}")
+                parts.append(f"```python\n{code[:1500]}\n```")
+            parts.append("")
+        
+        # 加入 key_info
+        if gathered.get("key_info"):
+            parts.append("## Key Information:")
+            for info in gathered["key_info"][:10]:
+                parts.append(f"- {info}")
+            parts.append("")
+        
+        return "\n".join(parts)
+    
+    # ==================== 相容舊流程的方法 ====================
     
     def execute_from_task(
         self, 
@@ -61,7 +419,7 @@ class DocWriter(BaseAgent):
         project_path: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        從 DocumentTask 執行完整撰寫流程（新的主要入口）
+        從 DocumentTask 執行完整撰寫流程（保持相容）
         
         Args:
             task: Planner 產生的文檔任務
@@ -118,7 +476,7 @@ class DocWriter(BaseAgent):
         for iteration in range(self.MAX_TOOL_ITERATIONS):
             response = self.chat_raw(
                 messages=messages,
-                tools=get_tools("read_file", "report_summary"),
+                tools=get_tools("read_file", "search_in_file", "search_in_project", "list_directory"),
                 keep_history=False
             )
             
@@ -207,26 +565,6 @@ class DocWriter(BaseAgent):
         
         return "\n".join(parts)
     
-    def _get_gather_system_prompt(self) -> str:
-        """取得收集資訊的系統 prompt"""
-        return """You are a technical writer gathering information from source code.
-
-Your job is to use the provided tools to read source files and extract information needed to write documentation.
-
-Available tools:
-- read_source_file: Read file content for code examples
-- get_class_info: Get class structure for API documentation
-- get_function_info: Get function details for reference docs
-- get_module_overview: Get overview of a module/directory
-
-Strategy:
-1. Start with suggested files from the planner
-2. Focus on public APIs and important functions
-3. Collect code examples that would help users
-4. Stop when you have enough information
-
-Be efficient - gather what's needed for good documentation."""
-    
     def _process_tool_result(
         self,
         tool_name: str,
@@ -235,7 +573,7 @@ Be efficient - gather what's needed for good documentation."""
         gathered: Dict[str, Any]
     ):
         """處理工具結果，更新 gathered context"""
-        if tool_name == "read_source_file":
+        if tool_name == "read_file":
             file_path = arguments.get("file_path", "unknown")
             gathered["files_read"].append(file_path)
             gathered["code_snippets"][file_path] = result.get("content", "")[:5000]
@@ -376,29 +714,171 @@ Be efficient - gather what's needed for good documentation."""
         )
         return response.message.content
     
-    def review(self, content: str) -> str:
+    def review(self, content: str, todo=None, report: Dict[str, Any] = None, max_revisions: int = 2) -> str:
         """
-        審核文檔
+        審核文檔並修正問題
         
         Args:
             content: 文檔內容
+            todo: DocTodo，用於檢查文件是否滿足需求
+            report: Phase 1 的 report.json
+            max_revisions: 最大修訂次數
             
         Returns:
-            str: 審核後的文檔內容
+            str: 審核並修正後的文檔內容
         """
-        self.log("Reviewing documentation...")
+        current_content = content
         
-        # 暫時切換模型進行審核
-        original_model = self.model
-        self.model = self.reviewer_model
+        # 建立 TODO 需求摘要
+        todo_requirements = self._build_todo_requirements(todo) if todo else ""
+        project_context = self._build_project_context_for_review(report) if report else ""
         
-        response = self.chat(
-            prompt_name=self.PROMPT_REVIEW,
-            variables={"content": content}
-        )
+        for revision in range(max_revisions):
+            self.log(f"Reviewing documentation (revision {revision + 1}/{max_revisions})...")
+            
+            # 建立審核變數
+            review_variables = {
+                "draft": current_content,
+                "todo_requirements": todo_requirements,
+                "project_context": project_context
+            }
+            
+            # 請 LLM 審核
+            response = self.chat(
+                prompt_name=self.PROMPT_REVIEW,
+                variables=review_variables,
+                format="json"
+            )
+            
+            # 解析審核結果
+            try:
+                review_result = self.parse_json(response.message.content or "{}")
+            except Exception:
+                # 如果無法解析，視為通過
+                self.log("Review result parsing failed, returning current content")
+                return current_content
+            
+            is_approved = review_result.get("is_approved", True)
+            issues = review_result.get("issues", [])
+            suggestions = review_result.get("suggestions", [])
+            
+            if is_approved or not issues:
+                self.log("Document approved!")
+                return current_content
+            
+            # 有問題，請 LLM 修正
+            self.log(f"Found {len(issues)} issues, requesting revision...")
+            
+            revision_prompt = self._build_revision_prompt(current_content, issues, suggestions)
+            
+            revision_response = self.chat_raw(
+                messages=[
+                    {"role": "system", "content": "You are a technical writer. Revise the document based on the feedback. Return ONLY the revised markdown document, no explanations."},
+                    {"role": "user", "content": revision_prompt}
+                ],
+                keep_history=False
+            )
+            
+            revised_content = revision_response.message.content or ""
+            
+            # 清理可能的 code fence
+            if revised_content.startswith("```markdown"):
+                revised_content = revised_content[len("```markdown"):].strip()
+            if revised_content.startswith("```md"):
+                revised_content = revised_content[len("```md"):].strip()
+            if revised_content.startswith("```"):
+                revised_content = revised_content[3:].strip()
+            if revised_content.endswith("```"):
+                revised_content = revised_content[:-3].strip()
+            
+            # 確保修訂後內容不為空
+            if revised_content.strip():
+                current_content = revised_content
+            else:
+                self.log("Warning: Revision returned empty content, keeping previous version")
         
-        self.model = original_model
-        return response.message.content
+        return current_content
+    
+    def _build_revision_prompt(self, content: str, issues: List[str], suggestions: List[str]) -> str:
+        """建立修訂 prompt"""
+        parts = [
+            "# Document to Revise:",
+            content,
+            "",
+            "# Issues Found:"
+        ]
+        for i, issue in enumerate(issues[:10], 1):
+            parts.append(f"{i}. {issue}")
+        
+        if suggestions:
+            parts.append("")
+            parts.append("# Suggestions:")
+            for i, suggestion in enumerate(suggestions[:10], 1):
+                parts.append(f"{i}. {suggestion}")
+        
+        parts.extend([
+            "",
+            "Please revise the document to address these issues.",
+            "Return the complete revised markdown document."
+        ])
+        
+        return "\n".join(parts)
+    
+    def _build_todo_requirements(self, todo) -> str:
+        """建立 TODO 需求摘要給 reviewer"""
+        if not todo:
+            return "No TODO requirements available."
+        
+        parts = [
+            f"Title: {todo.title}",
+            f"Type: {todo.doc_type}",
+            f"Description: {todo.description}",
+            ""
+        ]
+        
+        if todo.outline:
+            parts.append("Required Outline (ALL items must be covered):")
+            for i, item in enumerate(todo.outline, 1):
+                parts.append(f"  {i}. {item}")
+            parts.append("")
+        
+        if hasattr(todo, 'suggested_files') and todo.suggested_files:
+            parts.append("Suggested source files to reference:")
+            for f in todo.suggested_files[:10]:
+                parts.append(f"  - {f}")
+            parts.append("")
+        
+        return "\n".join(parts)
+    
+    def _build_project_context_for_review(self, report: Dict[str, Any]) -> str:
+        """建立專案 context 給 reviewer"""
+        if not report:
+            return "No project context available."
+        
+        parts = []
+        metadata = report.get("metadata", {})
+        
+        if metadata.get("project_summary"):
+            parts.append(f"Project Summary: {metadata['project_summary'][:500]}")
+            parts.append("")
+        
+        if metadata.get("entry_points"):
+            parts.append(f"Entry Points: {', '.join(metadata['entry_points'][:5])}")
+            parts.append("")
+        
+        if metadata.get("tech_stack"):
+            parts.append(f"Tech Stack: {metadata['tech_stack']}")
+            parts.append("")
+        
+        # 加入重要檔案摘要
+        file_summaries = report.get("file_summaries", {})
+        if file_summaries:
+            parts.append("Key Files:")
+            for path, summary in list(file_summaries.items())[:10]:
+                parts.append(f"  - {path}: {summary[:100]}")
+            parts.append("")
+        
+        return "\n".join(parts) if parts else "No project context available."
     
     @property
     def gathered_context(self) -> Dict[str, Any]:

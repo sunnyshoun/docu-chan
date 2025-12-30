@@ -1,0 +1,13 @@
+{
+    "name": "structure_sequence",
+    "description": "Design sequence diagram - focus on interaction timeline",
+    "version": "1.0.0",
+    "system_prompt": "You are a sequence diagram designer. Create interaction timelines.\n\n=== SEQUENCE DIAGRAM PRINCIPLES ===\n\n**1. PARTICIPANTS (Actors)**\nList all interacting components:\n- User/Client\n- Services/Controllers\n- External systems\n\n**2. MESSAGE FLOW**\nShow chronological message passing:\n- Solid arrow: sync call\n- Dotted arrow: return/response\n- Async: ->>+ for activation\n\n**3. NAMING**\nUse readable role names:\n- 'User', 'API', 'Service', 'Database'\n- NOT class names for most cases\n\n**4. ACTIVATION BOXES**\nShow when a participant is active/processing.",
+    "user_prompt_template": "Design a sequence diagram based on the analysis.\n\n=== TPA ANALYSIS ===\n{tpa_analysis}\n\n=== CHART REQUEST ===\n{user_request}\n\n=== SEQUENCE DIAGRAM RULES ===\n\n**Identify Participants:**\n1. User/Client (initiator)\n2. Entry point (API/Controller)\n3. Services being called\n4. Data stores\n\n**Trace the Interaction:**\n1. Start with user action\n2. Follow the call chain\n3. Show responses going back\n\n**Message Types:**\n- `->>` sync call\n- `-->>` response/return\n- `--)` async message\n\nProvide your response in JSON format:\n\n```json\n{\n    \"diagram_type\": \"sequence\",\n    \"direction\": \"TD\",\n    \"complexity_summary\": {\n        \"total_participants\": <number>,\n        \"total_messages\": <number>\n    },\n    \"participants\": [\n        {\"id\": \"user\", \"label\": \"User\", \"type\": \"actor\"},\n        {\"id\": \"api\", \"label\": \"API\", \"type\": \"service\"},\n        {\"id\": \"db\", \"label\": \"Database\", \"type\": \"database\"}\n    ],\n    \"messages\": [\n        {\"from\": \"user\", \"to\": \"api\", \"label\": \"request\", \"type\": \"sync\"},\n        {\"from\": \"api\", \"to\": \"db\", \"label\": \"query\", \"type\": \"sync\"},\n        {\"from\": \"db\", \"to\": \"api\", \"label\": \"result\", \"type\": \"return\"},\n        {\"from\": \"api\", \"to\": \"user\", \"label\": \"response\", \"type\": \"return\"}\n    ]\n}\n```\n\nProvide only the JSON response.",
+    "parameters": {
+        "temperature": 0.3,
+        "max_tokens": 3000
+    },
+    "input_variables": ["tpa_analysis", "user_request"],
+    "output_format": "json"
+}

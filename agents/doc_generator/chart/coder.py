@@ -2,7 +2,7 @@
 import re
 from typing import Optional
 
-from config.settings import get_config
+from config.agents import AgentName
 from agents.base import BaseAgent
 from models import StructureLogic, MermaidCode, VisualFeedback
 
@@ -14,12 +14,10 @@ class MermaidCoder(BaseAgent):
     PROMPT_REVISE = "doc_generator/mermaid_revise"
     PROMPT_FIX_ERROR = "doc_generator/mermaid_fix_error"
     
-    def __init__(self, model: Optional[str] = None, name: str = "MermaidCoder"):
-        config = get_config()
+    def __init__(self, coder_id: str = "A"):
         super().__init__(
-            name=name,
-            model=model or config.models.mermaid_coder,
-            think=True
+            agent_name=AgentName.MERMAID_CODER,
+            display_name=f"MermaidCoder-{coder_id}"
         )
     
     def generate(self, structure: StructureLogic) -> MermaidCode:
@@ -123,7 +121,8 @@ class MermaidCoder(BaseAgent):
         match = re.search(r'```\s*([\s\S]*?)\s*```', response)
         if match:
             code = match.group(1).strip()
-            if any(kw in code.lower() for kw in ['flowchart', 'graph', 'sequence', 'erdiagram']):
+            # 支援 flowchart, graph, sequence, erDiagram, classDiagram
+            if any(kw in code.lower() for kw in ['flowchart', 'graph', 'sequence', 'erdiagram', 'classdiagram']):
                 return self._fix_newlines(code)
         
         return None

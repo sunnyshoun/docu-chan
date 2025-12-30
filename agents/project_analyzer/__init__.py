@@ -1,13 +1,59 @@
 """
-Project Analyzer Module (Phase 1)
+Project Analyzer Module (Phase 1) - CoA 架構
 
-負責專案理解：
-- CodeReader: 讀取並分析程式檔案
-- ImageReader: 讀取並描述圖片
-- Analyzer: 分析整體專案結構
+使用 Chain of Agents 架構進行專案分析：
+- CoAProjectAnalyzer: 主要分析器（Worker + Manager）
+- FileAnalyzerWorker: 平行處理各檔案
+- ImageWorker: 圖片分析 Worker
+- AnalysisManager: 整合所有 Worker 結果
+
+特點：
+- 自動處理 .gitignore 排除規則
+- Worker 帶 timeout 防止卡住
+- Async 平行處理提升速度
+- LLM 自主決定是否讀取檔案
 """
 
-from .analyzer import ProjectAnalyzer
+# Data models
+from .models import FileInfo, FileAnalysisResult, ProjectContext
 
-__all__ = ["ProjectAnalyzer"]
+# Scanner utilities
+from .scanner import GitIgnoreParser, FileScanner
+
+# Worker agents
+from .file_worker import FileAnalyzerWorker, WORKER_TIMEOUT
+from .image_worker import ImageWorker
+
+# Manager agent
+from .manager import AnalysisManager
+
+# Main analyzer
+from .coa_analyzer import CoAProjectAnalyzer, create_coa_analyzer
+
+# 主要 export（統一使用 CoA 版本）
+ProjectAnalyzer = CoAProjectAnalyzer
+create_analyzer = create_coa_analyzer
+
+__all__ = [
+    # Models
+    "FileInfo",
+    "FileAnalysisResult",
+    "ProjectContext",
+    # Scanner
+    "GitIgnoreParser",
+    "FileScanner",
+    # Agents
+    "FileAnalyzerWorker",
+    "ImageWorker",
+    "AnalysisManager",
+    "CoAProjectAnalyzer",
+    # Factory
+    "create_coa_analyzer",
+    # Aliases
+    "ProjectAnalyzer",
+    "create_analyzer",
+    # Constants
+    "WORKER_TIMEOUT",
+]
+
 

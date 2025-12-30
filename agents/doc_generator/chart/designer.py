@@ -4,9 +4,9 @@ Diagram Designer - TPA 分析與結構設計
 支援 Tool Calling，可自主讀取檔案來補充 Planner 指引不足的資訊。
 """
 import json
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
-from config.settings import get_config
+from config.agents import AgentName
 from agents.base import BaseAgent
 from models import TPAAnalysis, StructureLogic, ChartTask
 from tools import get_tools, execute
@@ -21,41 +21,38 @@ class DiagramDesigner(BaseAgent):
     - 接收 Planner 的 ChartTask（包含指引和建議）
     - 根據指引自主讀取檔案來收集資訊
     - 執行 TPA 分析及結構邏輯設計
-    
-    工作流程：
-    1. gather_context(): 根據 task 的指引讀取相關檔案
-    2. analyze_tpa(): TPA 分析
-    3. design_structure(): 設計圖表結構
+    - 根據 chart_type 使用對應的 structure prompt
     """
     
     PROMPT_TPA = "doc_generator/designer_tpa"
-    PROMPT_STRUCTURE = "doc_generator/designer_structure"
-    PROMPT_GATHER = "doc_generator/designer_gather"  # 新增：收集資訊用
+    PROMPT_STRUCTURE = "doc_generator/designer_structure"  # default fallback
     
-    MAX_TOOL_ITERATIONS = 5  # 最多呼叫 5 次工具
+    # 不同圖表類型對應的 structure prompts
+    STRUCTURE_PROMPTS = {
+        "flowchart": "doc_generator/structure_flowchart",
+        "class": "doc_generator/structure_class",
+        "architecture": "doc_generator/structure_architecture",
+        "sequence": "doc_generator/structure_sequence",
+    }
     
-    def __init__(
-        self, 
-        model: Optional[str] = None,
-        project_path: Optional[str] = None
-    ):
-        config = get_config()
+    MAX_TOOL_ITERATIONS = 5
+    
+    def __init__(self, project_path: Optional[str] = None):
         super().__init__(
-            name="DiagramDesigner",
-            model=model or config.models.diagram_designer,
-            think=True
+            agent_name=AgentName.DIAGRAM_DESIGNER,
+            display_name="DiagramDesigner"
         )
         self._last_tpa: Optional[TPAAnalysis] = None
         self._last_structure: Optional[StructureLogic] = None
         self._gathered_context: Dict[str, Any] = {}
+        self._current_chart_type: Optional[str] = None
         
-        # 設定專案路徑（用於 tool calling）
         if project_path:
             set_project_root(project_path)
     
     def execute_from_task(self, task: ChartTask, project_path: Optional[str] = None) -> dict:
         """
-        從 ChartTask 執行完整設計流程（新的主要入口）
+        從 ChartTask 執行完整設計流程
         
         Args:
             task: Planner 產生的圖表任務
@@ -69,18 +66,21 @@ class DiagramDesigner(BaseAgent):
         
         self.log(f"Processing task: {task.title}")
         
-        # Step 1: 根據 task 收集上下文
+        # 記錄 chart_type 用於選擇對應的 structure prompt
+        self._current_chart_type = task.chart_type.value if hasattr(task.chart_type, 'value') else str(task.chart_type)
+        
+        # Step 1: 收集上下文
         self.log("Gathering context from source files...")
         gathered = self.gather_context(task)
         self._gathered_context = gathered
         
-        # Step 2: 建立完整的 user request（結合 task 資訊和收集到的上下文）
+        # Step 2: 建立 user request
         user_request = self._build_request_from_task(task, gathered)
         
         # Step 3: TPA 分析
         tpa = self.analyze_tpa(user_request)
         
-        # Step 4: 設計結構
+        # Step 4: 設計結構 (使用對應的 prompt)
         structure = self.design_structure(user_request, tpa)
         
         return {
@@ -92,17 +92,7 @@ class DiagramDesigner(BaseAgent):
         }
     
     def gather_context(self, task: ChartTask) -> Dict[str, Any]:
-        """
-        根據 task 的指引收集上下文資訊
-        
-        使用 tool calling 讓 LLM 決定要讀取哪些檔案。
-        
-        Args:
-            task: 圖表任務
-            
-        Returns:
-            dict: 收集到的上下文資訊
-        """
+        """根據 task 的指引收集上下文資訊"""
         gathered = {
             "files_read": [],
             "classes_found": [],
@@ -111,10 +101,8 @@ class DiagramDesigner(BaseAgent):
             "raw_content": {}
         }
         
-        # 建立收集資訊的 prompt
         gather_prompt = self._build_gather_prompt(task)
         
-        # 使用 tool calling 讓 LLM 決定要讀什麼
         messages = [
             {"role": "system", "content": self._get_gather_system_prompt()},
             {"role": "user", "content": gather_prompt}
@@ -123,17 +111,14 @@ class DiagramDesigner(BaseAgent):
         for iteration in range(self.MAX_TOOL_ITERATIONS):
             response = self.chat_raw(
                 messages=messages,
-                tools=get_tools("read_file", "report_summary"),
+                tools=get_tools("read_file", "search_in_file", "search_in_project", "list_directory"),
                 keep_history=False
             )
             
-            # 檢查是否有 tool calls
             if not response.message.tool_calls:
-                # 沒有更多工具呼叫，LLM 認為資訊已足夠
                 self.log(f"Context gathering complete after {iteration + 1} iterations")
                 break
             
-            # 執行 tool calls
             for tool_call in response.message.tool_calls:
                 tool_name = tool_call.function.name
                 try:
@@ -147,14 +132,14 @@ class DiagramDesigner(BaseAgent):
                 try:
                     result = execute(tool_name, **arguments)
                     result_dict = {"success": True, "result": str(result)}
+                    tool_content = json.dumps(result, ensure_ascii=False)[:2000]
                 except Exception as e:
                     result_dict = {"success": False, "error": str(e)}
+                    tool_content = json.dumps(result_dict, ensure_ascii=False)
                 
-                # 記錄結果
                 if result_dict.get("success"):
                     self._process_tool_result(tool_name, arguments, result_dict, gathered)
                 
-                # 加入 tool 結果到對話
                 messages.append({
                     "role": "assistant",
                     "content": "",
@@ -162,7 +147,7 @@ class DiagramDesigner(BaseAgent):
                 })
                 messages.append({
                     "role": "tool",
-                    "content": json.dumps(result, ensure_ascii=False)[:2000]  # 限制長度
+                    "content": tool_content
                 })
         
         return gathered
@@ -177,42 +162,43 @@ class DiagramDesigner(BaseAgent):
         ]
         
         if task.instructions:
+            parts.extend(["## Planner Instructions:", task.instructions, ""])
+        
+        # 優先顯示建議檔案，標註 entry point
+        if task.suggested_files:
             parts.extend([
-                "## Planner Instructions:",
-                task.instructions,
+                "## Files to Analyze (START FROM TOP!):",
+                "Read these files in order to understand the execution flow:",
                 ""
             ])
+            for i, f in enumerate(task.suggested_files):
+                if i == 0:
+                    parts.append(f"1. **{f}** ← START HERE (entry point)")
+                else:
+                    parts.append(f"{i+1}. {f}")
+            parts.append("")
         
         if task.questions_to_answer:
             parts.extend([
-                "## Questions to Answer:",
+                "## Questions to Answer (your diagram should visualize these):",
                 *[f"- {q}" for q in task.questions_to_answer],
-                ""
-            ])
-        
-        if task.suggested_files:
-            parts.extend([
-                "## Suggested Files to Read:",
-                *[f"- {f}" for f in task.suggested_files],
                 ""
             ])
         
         if task.suggested_participants:
             parts.extend([
-                "## Suggested Participants/Components:",
+                "## Components to Include:",
                 *[f"- {p}" for p in task.suggested_participants],
                 ""
             ])
         
         parts.extend([
             "## Your Task:",
-            "Use the available tools to read source files and gather information needed to design this diagram.",
-            "Focus on finding:",
-            "1. Class/function definitions relevant to this diagram",
-            "2. Relationships between components",
-            "3. Data flow or control flow patterns",
-            "",
-            "When you have enough information, stop calling tools."
+            "1. **Start from the first suggested file** (usually the entry point)",
+            "2. Follow the execution flow: entry → middleware → routes → services → database",
+            "3. Use search_in_project to find patterns (e.g., all routers, all services)",
+            "4. Map relationships between components",
+            "5. When you understand the flow, stop calling tools."
         ])
         
         return "\n".join(parts)
@@ -221,23 +207,36 @@ class DiagramDesigner(BaseAgent):
         """取得收集資訊的系統 prompt"""
         return """You are a diagram designer gathering information from source code.
 
-Your job is to use the provided tools to read source files and extract information needed to design a diagram.
+=== ANALYSIS STRATEGY ===
 
-Available tools:
-- read_source_file: Read file content
-- get_class_info: Get class structure (methods, attributes)
-- get_function_info: Get function details (args, returns)
-- find_references: Find where a symbol is used
-- get_module_overview: Get overview of a module/directory
-- analyze_call_flow: Trace function calls
+**START FROM ENTRY POINTS:**
+1. First, check the report.json metadata for entry_points (e.g., main.py, app.py)
+2. Read the entry point file to understand the application's main flow
+3. Follow imports and function calls to understand component relationships
+4. Use search_in_project to find specific patterns across the codebase
 
-Strategy:
-1. Start with suggested files from the planner
-2. Look at class/function structures
-3. Find relationships and dependencies
-4. Stop when you have enough information
+**TOOLS AVAILABLE:**
+- read_file: Read file content (start with entry points!)
+- search_in_file: Search for patterns in a specific file
+- search_in_project: Search across all project files (e.g., find all DB connections)
+- list_directory: Explore folder structure
 
-Be efficient - don't read more files than necessary."""
+**FOR FLOWCHARTS:**
+1. Start from entry point → trace the request/execution flow
+2. Look for: middleware, routers, services, database calls
+3. Map the sequence of function calls
+
+**FOR ARCHITECTURE DIAGRAMS:**
+1. Identify layers: API routes, services, database connections
+2. Search for: imports, clients, connections between components
+3. Find bidirectional relationships (Server <-> DB)
+
+**FOR CLASS DIAGRAMS:**
+1. Search for class definitions: search_in_project("class \\w+")
+2. Check inheritance: look for class X(Parent)
+3. Find method signatures and attributes
+
+Be efficient - read entry points first, then follow the execution flow."""
     
     def _process_tool_result(
         self,
@@ -246,42 +245,99 @@ Be efficient - don't read more files than necessary."""
         result: Dict[str, Any],
         gathered: Dict[str, Any]
     ):
-        """處理工具結果，更新 gathered context"""
-        if tool_name == "read_source_file":
+        """處理工具結果並提取程式碼結構"""
+        if tool_name == "read_file":
             file_path = arguments.get("file_path", "unknown")
             gathered["files_read"].append(file_path)
-            gathered["raw_content"][file_path] = result.get("content", "")[:3000]
+            content = str(result.get("result", ""))[:5000]
+            gathered["raw_content"][file_path] = content
+            
+            # 自動解析 class 和 method 結構
+            self._extract_code_structure(file_path, content, gathered)
+    
+    def _extract_code_structure(
+        self,
+        file_path: str,
+        content: str,
+        gathered: Dict[str, Any]
+    ):
+        """從程式碼內容提取 class、method 結構"""
+        import re
         
-        elif tool_name == "get_class_info":
-            for cls in result.get("classes", []):
-                gathered["classes_found"].append({
-                    "name": cls["name"],
-                    "file": arguments.get("file_path"),
-                    "methods": [m["name"] for m in cls.get("methods", [])],
-                    "bases": cls.get("bases", [])
-                })
+        lines = content.split('\n')
+        current_class = None
         
-        elif tool_name == "get_function_info":
-            for func in result.get("functions", []):
+        for i, line in enumerate(lines):
+            # 解析 class 定義
+            class_match = re.match(r'^class\s+(\w+)(?:\(([^)]*)\))?:', line)
+            if class_match:
+                class_name = class_match.group(1)
+                bases = class_match.group(2) or ""
+                bases_list = [b.strip() for b in bases.split(',') if b.strip()]
+                
+                current_class = {
+                    "name": class_name,
+                    "file": file_path,
+                    "bases": bases_list,
+                    "methods": [],
+                    "attributes": []
+                }
+                gathered["classes_found"].append(current_class)
+                
+                # 記錄繼承關係
+                for base in bases_list:
+                    gathered["relationships"].append(f"{class_name} inherits {base}")
+            
+            # 解析 method 定義 (在 class 內)
+            method_match = re.match(r'^\s+(async\s+)?def\s+(\w+)\s*\(([^)]*)\)', line)
+            if method_match and current_class:
+                is_async = bool(method_match.group(1))
+                method_name = method_match.group(2)
+                params = method_match.group(3)
+                
+                # 過濾 dunder methods
+                if not method_name.startswith('__') or method_name in ['__init__', '__call__']:
+                    current_class["methods"].append({
+                        "name": method_name,
+                        "async": is_async,
+                        "params": params[:50]
+                    })
+            
+            # 解析 self.xxx = 屬性 (在 __init__ 內)
+            attr_match = re.match(r'^\s+self\.(\w+)\s*=', line)
+            if attr_match and current_class:
+                attr_name = attr_match.group(1)
+                if not attr_name.startswith('_'):
+                    current_class["attributes"].append(attr_name)
+            
+            # 解析 class 結束（下一個非縮排行）
+            if current_class and not line.startswith(' ') and not line.startswith('\t') and line.strip() and not line.startswith('class'):
+                current_class = None
+            
+            # 解析頂層函數
+            top_func_match = re.match(r'^(async\s+)?def\s+(\w+)\s*\(([^)]*)\)', line)
+            if top_func_match and current_class is None:
+                is_async = bool(top_func_match.group(1))
+                func_name = top_func_match.group(2)
+                params = top_func_match.group(3)
+                
                 gathered["functions_found"].append({
-                    "name": func["name"],
-                    "file": arguments.get("file_path"),
-                    "args": [a["name"] for a in func.get("args", [])],
-                    "returns": func.get("returns")
+                    "name": func_name,
+                    "file": file_path,
+                    "async": is_async,
+                    "args": [p.strip().split(':')[0].strip() for p in params.split(',') if p.strip()],
+                    "returns": "unknown"
                 })
-        
-        elif tool_name == "find_references":
-            gathered["relationships"].extend([
-                f"{ref['file']}:{ref['line']}: {ref['content']}"
-                for ref in result.get("references", [])[:10]
-            ])
-        
-        elif tool_name == "analyze_call_flow":
-            calls = result.get("calls", [])
-            gathered["relationships"].extend([
-                f"{arguments.get('function_name')} -> {c['name']}"
-                for c in calls
-            ])
+            
+            # 解析 import 關係
+            import_match = re.match(r'^from\s+([\w.]+)\s+import\s+(.+)', line)
+            if import_match:
+                module = import_match.group(1)
+                imports = import_match.group(2)
+                for imp in imports.split(','):
+                    imp_name = imp.strip().split(' as ')[0].strip()
+                    if imp_name and not imp_name.startswith('('):
+                        gathered["relationships"].append(f"{file_path} imports {imp_name} from {module}")
     
     def _build_request_from_task(self, task: ChartTask, gathered: Dict[str, Any]) -> str:
         """從 task 和 gathered context 建立完整的 user request"""
@@ -292,48 +348,66 @@ Be efficient - don't read more files than necessary."""
             ""
         ]
         
-        # 加入收集到的類別資訊
+        # 展示發現的 class 結構（包含內部細節）
         if gathered.get("classes_found"):
-            parts.append("## Discovered Classes:")
+            parts.append("## Discovered Classes (with internal structure):")
             for cls in gathered["classes_found"]:
-                parts.append(f"- {cls['name']}: methods={cls['methods']}, bases={cls['bases']}")
+                class_info = [f"### {cls['name']}"]
+                if cls.get("bases"):
+                    class_info.append(f"  - Inherits: {', '.join(cls['bases'])}")
+                if cls.get("attributes"):
+                    class_info.append(f"  - Attributes: {', '.join(cls['attributes'][:10])}")
+                if cls.get("methods"):
+                    method_names = [m['name'] if isinstance(m, dict) else m for m in cls['methods'][:8]]
+                    class_info.append(f"  - Key Methods: {', '.join(method_names)}")
+                parts.extend(class_info)
             parts.append("")
         
-        # 加入收集到的函數資訊
         if gathered.get("functions_found"):
             parts.append("## Discovered Functions:")
-            for func in gathered["functions_found"]:
-                parts.append(f"- {func['name']}({', '.join(func['args'])}) -> {func['returns']}")
+            for func in gathered["functions_found"][:15]:
+                async_prefix = "async " if func.get("async") else ""
+                parts.append(f"- {async_prefix}{func['name']}({', '.join(func['args'][:5])})")
             parts.append("")
         
-        # 加入關係資訊
+        # 整理並去重關係
         if gathered.get("relationships"):
-            parts.append("## Discovered Relationships:")
-            for rel in gathered["relationships"][:20]:
-                parts.append(f"- {rel}")
-            parts.append("")
+            unique_rels = []
+            seen = set()
+            for rel in gathered["relationships"]:
+                # 只保留繼承和重要的 import 關係
+                if "inherits" in rel or ("imports" in rel and any(kw in rel for kw in ["Agent", "Loop", "Worker", "Manager", "Coder", "Designer", "Writer", "Executor"])):
+                    key = rel.split(" from ")[0] if " from " in rel else rel
+                    if key not in seen:
+                        seen.add(key)
+                        unique_rels.append(rel)
+            
+            if unique_rels:
+                parts.append("## Key Relationships:")
+                for rel in unique_rels[:25]:
+                    parts.append(f"- {rel}")
+                parts.append("")
         
-        # 加入原有的 context 和 hints
         if task.context:
             parts.extend(["## Additional Context:", task.context, ""])
         
         if task.tpa_hints:
             parts.extend(["## Design Hints:", json.dumps(task.tpa_hints, indent=2), ""])
         
+        # 加入命名策略提示
+        parts.extend([
+            "## NAMING GUIDELINES:",
+            "- For classDiagram: Use actual class names from discovered classes",
+            "- For flowchart/architecture: Use readable, abstracted names that convey purpose",
+            "- Base your understanding on the discovered code structure",
+            "- Names should be clear to readers unfamiliar with implementation details",
+            ""
+        ])
+        
         return "\n".join(parts)
     
-    # ==================== 原有方法（保持相容） ====================
-    
     def analyze_tpa(self, user_request: str) -> TPAAnalysis:
-        """
-        分析 Task, Purpose, Audience
-        
-        Args:
-            user_request: 使用者請求（已包含收集到的上下文）
-            
-        Returns:
-            TPAAnalysis: TPA 分析結果
-        """
+        """分析 Task, Purpose, Audience"""
         self.log("Analyzing TPA...")
         response = self.chat(
             prompt_name=self.PROMPT_TPA,
@@ -345,19 +419,14 @@ Be efficient - don't read more files than necessary."""
         return tpa
     
     def design_structure(self, user_request: str, tpa: TPAAnalysis) -> StructureLogic:
-        """
-        設計圖表結構
+        """設計圖表結構（根據 chart_type 選擇對應 prompt）"""
+        # 選擇對應的 structure prompt
+        chart_type = self._current_chart_type or tpa.task.get("type", "flowchart")
+        prompt_name = self.STRUCTURE_PROMPTS.get(chart_type, self.PROMPT_STRUCTURE)
         
-        Args:
-            user_request: 使用者請求
-            tpa: TPA 分析結果
-            
-        Returns:
-            StructureLogic: 結構邏輯
-        """
-        self.log("Designing structure...")
+        self.log(f"Designing structure using prompt: {prompt_name}")
         response = self.chat(
-            prompt_name=self.PROMPT_STRUCTURE,
+            prompt_name=prompt_name,
             variables={
                 "tpa_analysis": tpa.to_dict(),
                 "user_request": user_request
@@ -369,15 +438,7 @@ Be efficient - don't read more files than necessary."""
         return structure
     
     def execute(self, user_request: str) -> dict:
-        """
-        執行完整設計流程（舊入口，保持相容）
-        
-        Args:
-            user_request: 使用者請求
-            
-        Returns:
-            dict: 包含 tpa, structure, user_request
-        """
+        """執行完整設計流程（簡易入口）"""
         self.log(f"Processing request: {user_request[:100]}...")
         tpa = self.analyze_tpa(user_request)
         structure = self.design_structure(user_request, tpa)

@@ -1,41 +1,35 @@
 """
 Agents module for Doc Generator
 
-包含四個主要模組：
-- project_analyzer: 專案分析（Phase 1）
-- doc_planner: 文檔規劃（Phase 2）
-- doc_generator: 內容生成（Phase 3）
-- packer: 打包發布（Phase 4）
+三階段架構：
+- Phase 1: project_analyzer - 專案分析
+- Phase 2: doc_planner - 規劃（DocPlanner）
+- Phase 3: doc_generator - 內容生成（DocWriter + ChartLoop）
 """
 
 from .base import BaseAgent
 
-# Project Analyzer
-from .project_analyzer import ProjectAnalyzer
+# Phase 1: 專案分析
+from .project_analyzer import ProjectAnalyzer, CoAProjectAnalyzer, create_coa_analyzer
 
-# Doc Planner
-from .doc_planner import DocPlanner, ChartPlanner, PlannerOrchestrator
+# Phase 2: 規劃
+from .doc_planner import (
+    DocPlanner, PlannerOutput, DocTodo, ChartTodo
+)
 
-# Doc Generator
-from .doc_generator import DocWriter, ChartLoop, DiagramDesigner
-
-# Packer
-from .packer import Packer
+# Phase 3: 內容生成
+from .doc_generator import ChartLoop, DiagramDesigner, MermaidCoder, CodeExecutor, DocWriter
 
 __all__ = [
     # Base
     "BaseAgent",
-    # Phase 1: Understanding
+    # Phase 1: 專案分析
     "ProjectAnalyzer",
-    # Phase 2: Planning
-    "DocPlanner",
-    "ChartPlanner",
-    "PlannerOrchestrator",
-    # Phase 3: Generation
-    "DocWriter",
-    "ChartLoop",
-    "DiagramDesigner",
-    # Phase 4: Packaging
-    "Packer",
+    "CoAProjectAnalyzer",
+    "create_coa_analyzer",
+    # Phase 2: 規劃
+    "DocPlanner", "PlannerOutput", "DocTodo", "ChartTodo",
+    # Phase 3: 內容生成
+    "DocWriter", "ChartLoop",
+    "DiagramDesigner", "MermaidCoder", "CodeExecutor",
 ]
-

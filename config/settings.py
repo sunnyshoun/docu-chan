@@ -7,32 +7,6 @@ from dotenv import load_dotenv
 
 
 @dataclass
-class ModelConfig:
-    """模型配置（預設值定義於此，不從 .env 讀取）"""
-    # Phase 1
-    code_reader: str = "gpt-oss:20b"
-    image_reader: str = "gemma3:4b"
-    project_analyzer: str = "gpt-oss:120b"
-    
-    # Phase 2
-    doc_planner: str = "gpt-oss:120b"
-    chart_planner: str = "gpt-oss:120b"  # Chart Planner
-    planner_worker: str = "gpt-oss:20b"  # CoA Worker
-    
-    # Phase 3 - Text
-    tech_writer: str = "gpt-oss:20b"
-    doc_reviewer: str = "gpt-oss:20b"
-    
-    # Phase 3 - Chart
-    diagram_designer: str = "gpt-oss:20b"
-    mermaid_coder: str = "gpt-oss:20b"
-    visual_inspector: str = "gemma3:4b"
-    
-    # Phase 4
-    publisher: str = "gemma3:4b"
-
-
-@dataclass
 class ChartConfig:
     """Chart Generation 配置"""
     max_iterations: int = 5
@@ -42,27 +16,28 @@ class ChartConfig:
 
 @dataclass
 class Config:
-    """應用程式主配置"""
+    """
+    應用程式主配置
+    
+    包含：
+    - api_key: 全域 API 密鑰
+    - api_base_url: 全域 API 端點
+    - 路徑配置（prompts, outputs, logs）
+    - chart: 圖表生成配置
+    
+    Agent 模型配置請見 config/agents.py
+    """
     api_key: str
     api_base_url: str
     project_root: Path
     prompts_dir: Path
     outputs_dir: Path
     logs_dir: Path
-    models: ModelConfig = field(default_factory=ModelConfig)
     chart: ChartConfig = field(default_factory=ChartConfig)
     
     @classmethod
     def from_env(cls, env_path: Optional[str] = None) -> "Config":
-        """
-        從環境變數載入配置
-        
-        Args:
-            env_path: .env 檔案路徑
-            
-        Returns:
-            Config: 配置實例
-        """
+        """從環境變數載入配置"""
         # 尋找專案根目錄
         project_root = Path(__file__).resolve().parent.parent
         
@@ -95,17 +70,13 @@ class Config:
             "https://api-gateway.netdb.csie.ncku.edu.tw"
         )
         
-        # 路徑配置
-        logs_dir = project_root / "logs"
-        outputs_dir = project_root / "outputs"
-        
         return cls(
             api_key=api_key,
             api_base_url=api_base_url,
             project_root=project_root,
             prompts_dir=project_root / "prompts",
-            outputs_dir=outputs_dir,
-            logs_dir=logs_dir
+            outputs_dir=project_root / "outputs",
+            logs_dir=project_root / "logs"
         )
     
     def __repr__(self) -> str:
@@ -113,7 +84,6 @@ class Config:
             f"Config(\n"
             f"  api_base_url={self.api_base_url}\n"
             f"  project_root={self.project_root}\n"
-            f"  models=ModelConfig(...)\n"
             f")"
         )
 
@@ -123,20 +93,10 @@ _config: Optional[Config] = None
 
 
 def get_config(env_path: Optional[str] = None) -> Config:
-    """
-    取得配置實例（單例模式）
-    
-    Args:
-        env_path: .env 檔案路徑
-        
-    Returns:
-        Config: 配置實例
-    """
+    """取得配置實例（單例模式）"""
     global _config
-    
     if _config is None or env_path is not None:
         _config = Config.from_env(env_path)
-    
     return _config
 
 

@@ -2,25 +2,15 @@
 CHARTAF - Chart Auto-Feedback System
 
 基於 C2 論文 (NAACL 2025) 的簡化架構：
-- 大模型 (120b) 根據圖表類型動態生成評估問題
-- VLM (gemma) 逐一回答二元問題
+- 大模型根據圖表類型動態生成評估問題
+- VLM 逐一回答二元問題
 - 生成 Granular Feedback (RETAIN/EDIT/DISCARD/ADD)
-
-改進：
-- 問題由大模型根據圖表類型動態生成
-- VLM 只負責看圖回答 YES/NO
-- 支援 async 平行處理
-
-架構：
-- QuestionGenerator: 使用大模型生成評估問題
-- VisualInspector: 使用 VLM 回答二元問題
-- ChartAF: 組合以上兩者，執行完整評估流程
 """
 import asyncio
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
-from config.settings import get_config
+from config.agents import AgentName
 from agents.base import BaseAgent
 from models import VisualFeedback, FeedbackType, TPAAnalysis, StructureLogic
 from utils.image_utils import encode_image_base64
@@ -62,18 +52,16 @@ class QuestionGenerator(BaseAgent):
     """
     問題生成器
     
-    使用大模型 (120b) 根據圖表類型動態生成評估問題
+    使用大模型根據圖表類型動態生成評估問題
     僅支援 async 模式
     """
     
     PROMPT_NAME = "doc_generator/chartaf_question_generator"
     
-    def __init__(self, model: Optional[str] = None):
-        config = get_config()
+    def __init__(self):
         super().__init__(
-            name="QuestionGenerator",
-            model=model or config.models.project_analyzer,
-            think=False
+            agent_name=AgentName.QUESTION_GENERATOR,
+            display_name="QuestionGenerator"
         )
     
     async def generate(
@@ -274,12 +262,10 @@ class VisualInspector(BaseAgent):
     
     PROMPT_NAME = "doc_generator/chartaf_single_question"
     
-    def __init__(self, model: Optional[str] = None):
-        config = get_config()
+    def __init__(self):
         super().__init__(
-            name="VisualInspector",
-            model=model or config.models.visual_inspector,
-            think=False  # VLM 不支援 thinking
+            agent_name=AgentName.VISUAL_INSPECTOR,
+            display_name="VisualInspector"
         )
     
     async def evaluate_question(
@@ -422,13 +408,9 @@ class ChartAF:
     # 通過閾值
     APPROVAL_THRESHOLD = 0.8
     
-    def __init__(
-        self,
-        vlm_model: Optional[str] = None,
-        question_generator_model: Optional[str] = None
-    ):
-        self.question_generator = QuestionGenerator(model=question_generator_model)
-        self.visual_inspector = VisualInspector(model=vlm_model)
+    def __init__(self):
+        self.question_generator = QuestionGenerator()
+        self.visual_inspector = VisualInspector()
         self._eval_history: List[ChartAFResult] = []
     
     def log(self, message: str) -> None:

@@ -7,12 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Tuple
 
-from config import config
 from models import (
     TPAAnalysis, StructureLogic, MermaidCode,
     VisualFeedback, FeedbackType, ChartResult, ChartTask
 )
 from utils.file_utils import ensure_dir
+from utils.logger import get_logger
 
 from .designer import DiagramDesigner
 from .coder import MermaidCoder
@@ -37,18 +37,9 @@ class ChartLoop:
         self,
         log_dir: Optional[str] = None,
         output_dir: Optional[str] = None,
-        designer_model: Optional[str] = None,
-        coder_model: Optional[str] = None,
-        coder_model_b: Optional[str] = None,
-        evaluator_model: Optional[str] = None,
-        vlm_model: Optional[str] = None,
         use_dual_coder: bool = True
     ):
         self.use_dual_coder = use_dual_coder
-        self.coder_model_a = coder_model or config.models.mermaid_coder
-        self.coder_model_b = coder_model_b or self.coder_model_a
-        self.vlm_model = vlm_model or config.models.visual_inspector
-        self.evaluator_model = evaluator_model or config.models.visual_inspector
         
         # 路徑配置
         self.log_dir = Path(log_dir) if log_dir else Path("logs/phase3/charts")
@@ -57,19 +48,15 @@ class ChartLoop:
         ensure_dir(self.output_dir)
         
         # 初始化元件
-        self.designer = DiagramDesigner(model=designer_model)
+        self.designer = DiagramDesigner()
         self.executor = CodeExecutor(output_dir=str(self.log_dir))
-        self.chartaf = ChartAF(
-            vlm_model=self.vlm_model,
-            question_generator_model=self.evaluator_model
-        )
+        self.chartaf = ChartAF()
         
         self._session_id: Optional[str] = None
     
     def _create_coder(self, coder_id: str = "A") -> MermaidCoder:
         """建立全新的 Coder 實例（乾淨 context）"""
-        model = self.coder_model_a if coder_id == "A" else self.coder_model_b
-        return MermaidCoder(model=model, name=f"Coder-{coder_id}")
+        return MermaidCoder(coder_id=coder_id)
     
     def _ping_pong_fix(
         self,
@@ -92,7 +79,8 @@ class ChartLoop:
             coder_id = "A" if attempt % 2 == 0 else "B"
             round_num = attempt // 2 + 1
             
-            print(f"    [Coder {coder_id}] Fixing (round {round_num})...")
+            logger = get_logger()
+            logger.progress(f"    [Coder {coder_id}] Fixing (round {round_num})...")
             
             # 建立全新 Coder
             coder = self._create_coder(coder_id)
@@ -100,7 +88,7 @@ class ChartLoop:
             try:
                 fixed_code = coder.fix_error(structure, current_code, current_error)
             except Exception as e:
-                print(f"    [Coder {coder_id}] x {e}")
+                logger.warning(f"    [Coder {coder_id}] Fix failed: {e}")
                 # 修復失敗，直接傳給下一個 Coder（不更新 current_code）
                 continue
             
@@ -110,15 +98,15 @@ class ChartLoop:
             render_result = self.executor.render(fixed_code_obj.code, output_name=f"_fix_{attempt}")
             
             if render_result.success:
-                print(f"    [Coder {coder_id}] v Fixed!")
+                logger.info(f"    [Coder {coder_id}] Fixed successfully!")
                 return True, fixed_code_obj
             
             # 渲染失敗，把結果傳給下一個 Coder
-            print(f"    [Coder {coder_id}] x Still error, passing to next...")
+            logger.debug(f"    [Coder {coder_id}] Still has error, passing to next...")
             current_code = fixed_code_obj.code
             current_error = self._extract_error_message(render_result.error)
         
-        print(f"    x Max attempts ({max_attempts}) reached")
+        logger.warning(f"    Max attempts ({max_attempts}) reached for ping-pong fix")
         return False, None
     
     def run(
@@ -136,16 +124,17 @@ class ChartLoop:
         # 設定 executor 輸出到 session_dir
         self.executor.output_dir = session_dir
         
-        print(f"\n{'='*60}")
-        print("Chart Generation Loop Started")
-        print(f"{'='*60}")
-        print(f"Request: {user_request[:100]}...")
-        print(f"Session: {self._session_id}")
+        logger = get_logger()
+        logger.info("=" * 60)
+        logger.info("Chart Generation Loop Started")
+        logger.info("=" * 60)
+        logger.info(f"Request: {user_request[:100]}...")
+        logger.debug(f"Session: {self._session_id}")
         
         feedback_history: List[VisualFeedback] = []
         
         # Step 1: Design
-        print("\n[Step 1] Designing chart structure...")
+        logger.info("[Step 1] Designing chart structure...")
         
         try:
             design_data = self.designer.execute(user_request)
@@ -154,8 +143,8 @@ class ChartLoop:
         except Exception as e:
             return ChartResult(success=False, error=f"Design failed: {e}")
         
-        print(f"  v TPA: {tpa.task_type}")
-        print(f"  v Structure: {structure.node_count} nodes, {structure.edge_count} edges")
+        logger.info(f"  TPA: {tpa.task_type}")
+        logger.debug(f"  Structure: {structure.node_count} nodes, {structure.edge_count} edges")
         
         current_code: Optional[MermaidCode] = None
         current_feedback: Optional[VisualFeedback] = None
@@ -168,21 +157,21 @@ class ChartLoop:
         
         while visual_iterations < self.MAX_VISUAL_ITERATIONS and render_attempts < max_attempts:
             render_attempts += 1
-            print(f"\n[Iteration {visual_iterations + 1}/{self.MAX_VISUAL_ITERATIONS}] (attempt {render_attempts})")
+            logger.progress(f"[Iteration {visual_iterations + 1}/{self.MAX_VISUAL_ITERATIONS}] (attempt {render_attempts})")
             
             # Step 2: Generate/Revise Code（每次用全新 Coder）
             coder = self._create_coder("A")
             
             try:
                 if current_code is None:
-                    print("  [Step 2] Generating Mermaid code...")
+                    logger.info("  [Step 2] Generating Mermaid code...")
                     current_code = coder.generate(structure)
                 else:
-                    print("  [Step 2] Revising code based on feedback...")
+                    logger.info("  [Step 2] Revising code based on feedback...")
                     current_code = coder.revise(structure, current_code.code, current_feedback)
-                print(f"  v Code generated")
+                logger.debug("  Code generated")
             except Exception as e:
-                print(f"  x Code generation failed: {e}")
+                logger.warning(f"  Code generation failed: {e}")
                 current_feedback = VisualFeedback(
                     is_approved=False,
                     feedback_type=FeedbackType.OTHER,
@@ -193,7 +182,7 @@ class ChartLoop:
                 continue
             
             # Step 3: Render
-            print("  [Step 3] Rendering to PNG...")
+            logger.info("  [Step 3] Rendering to PNG...")
             attempt_name = f"attempt_{render_attempts}"
             
             # 保存 mermaid 代碼到 session_dir
@@ -203,11 +192,11 @@ class ChartLoop:
             
             if not render_result.success:
                 short_error = self._extract_error_message(render_result.error)
-                print(f"  x Render failed: {short_error}")
+                logger.warning(f"  Render failed: {short_error}")
                 
                 # 嘗試 ping-pong 修復
                 if self.use_dual_coder:
-                    print("  [Step 3.5] Dual Coder ping-pong...")
+                    logger.info("  [Step 3.5] Dual Coder ping-pong...")
                     fixed, fixed_code = self._ping_pong_fix(structure, current_code.code, short_error)
                     
                     if fixed and fixed_code:
@@ -252,14 +241,14 @@ class ChartLoop:
                 visual_iterations += 1
                 final_image_path = render_result.image_path
                 final_image_base64 = render_result.image_base64
-                print(f"  v Rendered: {final_image_path}")
+                logger.info(f"  Rendered: {final_image_path}")
             
             # Step 4: CHARTAF Inspection
             if skip_inspection:
-                print("  [Step 4] Skipping inspection")
+                logger.debug("  [Step 4] Skipping inspection")
                 break
             
-            print("  [Step 4] CHARTAF evaluation...")
+            logger.info("  [Step 4] CHARTAF evaluation...")
             
             try:
                 current_feedback = asyncio.run(self.chartaf.evaluate(
@@ -311,11 +300,12 @@ class ChartLoop:
         self._save_session_log(result, user_request)
         
         status = "Completed" if has_output else "Failed"
-        print(f"\n{'='*60}")
-        print(f"Chart Generation {status}")
+        logger.finish_progress()
+        logger.info("=" * 60)
+        logger.info(f"Chart Generation {status}")
         if final_output_path:
-            print(f"Output: {final_output_path}")
-        print(f"{'='*60}\n")
+            logger.info(f"Output: {final_output_path}")
+        logger.info("=" * 60)
         
         return result
     
@@ -348,18 +338,19 @@ class ChartLoop:
         
         self.executor.output_dir = session_dir
         
-        print(f"\n{'='*60}")
-        print("Chart Generation Loop Started (from Task)")
-        print(f"{'='*60}")
-        print(f"Task: {task.title}")
-        print(f"Type: {task.chart_type.value}")
-        print(f"Session: {self._session_id}")
+        logger = get_logger()
+        logger.info("=" * 60)
+        logger.info("Chart Generation Loop Started (from Task)")
+        logger.info("=" * 60)
+        logger.info(f"Task: {task.title}")
+        logger.info(f"Type: {task.chart_type.value}")
+        logger.debug(f"Session: {self._session_id}")
         
         feedback_history: List[VisualFeedback] = []
         
         # Step 1: Design（使用新的 execute_from_task，Designer 會自己讀檔）
-        print("\n[Step 1] Designing chart structure...")
-        print("  Designer will gather context from source files...")
+        logger.info("[Step 1] Designing chart structure...")
+        logger.debug("  Designer will gather context from source files...")
         
         # 建立帶有專案路徑的 Designer
         designer = DiagramDesigner(project_path=project_path)
@@ -372,12 +363,12 @@ class ChartLoop:
             gathered = design_data.get("gathered_context", {})
             
             files_read = len(gathered.get("files_read", []))
-            print(f"  v Files read by Designer: {files_read}")
+            logger.info(f"  Files read by Designer: {files_read}")
         except Exception as e:
             return ChartResult(success=False, error=f"Design failed: {e}")
         
-        print(f"  v TPA: {tpa.task_type}")
-        print(f"  v Structure: {structure.node_count} nodes, {structure.edge_count} edges")
+        logger.info(f"  TPA: {tpa.task_type}")
+        logger.debug(f"  Structure: {structure.node_count} nodes, {structure.edge_count} edges")
         
         # 後續流程與 run() 相同
         current_code: Optional[MermaidCode] = None
@@ -391,20 +382,20 @@ class ChartLoop:
         
         while visual_iterations < self.MAX_VISUAL_ITERATIONS and render_attempts < max_attempts:
             render_attempts += 1
-            print(f"\n[Iteration {visual_iterations + 1}/{self.MAX_VISUAL_ITERATIONS}] (attempt {render_attempts})")
+            logger.progress(f"[Iteration {visual_iterations + 1}/{self.MAX_VISUAL_ITERATIONS}] (attempt {render_attempts})")
             
             coder = self._create_coder("A")
             
             try:
                 if current_code is None:
-                    print("  [Step 2] Generating Mermaid code...")
+                    logger.info("  [Step 2] Generating Mermaid code...")
                     current_code = coder.generate(structure)
                 else:
-                    print("  [Step 2] Revising code based on feedback...")
+                    logger.info("  [Step 2] Revising code based on feedback...")
                     current_code = coder.revise(structure, current_code.code, current_feedback)
-                print(f"  v Code generated")
+                logger.debug("  Code generated")
             except Exception as e:
-                print(f"  x Code generation failed: {e}")
+                logger.warning(f"  Code generation failed: {e}")
                 current_feedback = VisualFeedback(
                     is_approved=False,
                     feedback_type=FeedbackType.OTHER,
@@ -414,7 +405,7 @@ class ChartLoop:
                 feedback_history.append(current_feedback)
                 continue
             
-            print("  [Step 3] Rendering to PNG...")
+            logger.info("  [Step 3] Rendering to PNG...")
             attempt_name = f"attempt_{render_attempts}"
             self._save_attempt_mmd(current_code.code, render_attempts)
             
@@ -422,7 +413,7 @@ class ChartLoop:
             
             if not render_result.success:
                 short_error = self._extract_error_message(render_result.error)
-                print(f"  x Render failed: {short_error}")
+                logger.warning(f"  Render failed: {short_error}")
                 
                 if self.use_dual_coder:
                     print("  [Step 3.5] Dual Coder ping-pong...")
