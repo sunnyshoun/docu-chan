@@ -31,7 +31,11 @@ class AgentConfig:
         
 
 AGENT_CONFIGS = {
-    "model1":AgentConfig(
-        model="gemma3:4b"
+    "CodeAnalyzer":AgentConfig(
+        model="qwen2.5-coder:3b",
+        api_url=dotenv.get_key(".env", "CUSTOM_API_URL") or "http://localhost:11434",
+        api_key=None,
+        temperature=0.3,
+        num_ctx=4096
     )
 }
