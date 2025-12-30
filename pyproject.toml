@@ -1,14 +1,10 @@
 [project]
-name = "docu-chan"
+name = "docu-chan-rework"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "chardet>=5.2.0",
-    "gitpython>=3.1.45",
     "ollama>=0.6.1",
-    "pillow>=12.0.0",
     "python-dotenv>=1.2.1",
-    "requests>=2.32.5",
 ]
