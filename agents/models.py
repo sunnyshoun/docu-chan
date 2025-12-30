@@ -1,4 +1,4 @@
-from typing import Optional, Mapping, Any, Literal
+from typing import Callable, Optional, Mapping, Any, Literal
 from dataclasses import dataclass, field
 from pathlib import Path
 from pydantic import BaseModel
@@ -99,16 +99,16 @@ class ChatResponse(Message):
 
 @dataclass
 class ChatRequest:
-    messages: Optional[list[Mapping[str, Any]]] = None
+    messages: Optional[list[dict[str, Any]]] = None
     'Messages to chat with.'
     
-    model: str
+    model: str = field(default="gpt-oss:20b")
     'Model to use for the chat.'
 
     think: Optional[bool | Literal['low', 'medium', 'high']] = None
     'Enable thinking mode (for thinking models).'
     
-    tools: Optional[list[callable]] = None
+    tools: Optional[list[Callable]] = None
     'Tools to use for the chat.'
     
     num_ctx: int = field(default=1024)

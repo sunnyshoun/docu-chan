@@ -1,7 +1,8 @@
 from pathlib import Path
 from logging import Logger, getLogger, DEBUG, INFO, WARNING, ERROR, CRITICAL
+from typing import Callable
 from config.setting import PROMPT_ROOT, AgentConfig, AGENT_CONFIGS
-from agents.models import ChatRequest
+from agents.models import ChatRequest, ChatResponse
 from agents.llm_client import chat, async_chat
 
 class BaseAgent:
@@ -16,7 +17,7 @@ class BaseAgent:
         self.agent_config = AGENT_CONFIGS[name]
         self.logger = getLogger(name)
 
-    def chat(self, messages: list[dict], tools: list[callable] = None, format: str = None) -> str:
+    def chat(self, messages: list[dict], tools: list[Callable] = None, format: str = None) -> ChatResponse:
         request = ChatRequest(
             messages=messages,
             model=self.agent_config.model,
@@ -32,7 +33,7 @@ class BaseAgent:
             api_key=self.agent_config.api_key
         )
     
-    async def async_chat(self, messages: list[dict], tools: list[callable] = None, format: str = None) -> str:
+    async def async_chat(self, messages: list[dict], tools: list[Callable] = None, format: str = None) -> ChatResponse:
         request = ChatRequest(
             messages=messages,
             model=self.agent_config.model,
