@@ -100,7 +100,7 @@ class FileInfo:
     def __repr__(self):
         status = f" [ERR: {self.error}]" if self.error else ""
         type_str = 'Dir' if self.is_dir else 'File'
-        return f"{type_str}: {self.name+status:<30}, type:{self.file_type:<8}, {self.is_dir:<1} {self.is_text:<1} {self.is_image:<1}"
+        return f"{type_str}: {self.name+status:<30}, type:{self.file_type:<8}({self.confidence:.1f}), {self.is_dir:<1} {self.is_text:<1} {self.is_image:<1}"
     
     def relative_to(self, other: str | Path) -> Path:
         return self.path.relative_to(Path(other))
@@ -111,10 +111,8 @@ class FileInfo:
         if not self.is_text:
             return "<<<base64encoded>>>\n" + self.read_base64(line**2)
         
-        lines: list[str] = []
+        lines = self.path.read_bytes().decode(self.file_type or "utf-8", "replace").split("\n")
         shrink: list[str] = []
-        with open(self.path, "r", encoding=self.file_type) as f:
-            lines = f.readlines()
         
         for l in lines:
             ll = l.strip()
