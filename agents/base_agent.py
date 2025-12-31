@@ -50,6 +50,9 @@ class BaseAgent:
         )
         
     def log(self, level: int, message: str):
+        """
+        level: 1=DEBUG, 2=INFO, 3=WARNING, 4=ERROR, 5=CRITICAL
+        """
         LOG_LEVELS = {
             1: DEBUG,
             2: INFO,

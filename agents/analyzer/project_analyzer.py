@@ -31,7 +31,7 @@ class ProjectAnalyzer(BaseAgent):
     def run(self):
         self.report["impression"] = self.impression()
         print(self.report["impression"])
-        Path("dumps.md").write_text(self.dumps_report())
+        Path("dumps.md").write_text(self.dumps_report(), encoding="utf-8")
         
         for f in self.file_list:
             r = ""
@@ -45,7 +45,7 @@ class ProjectAnalyzer(BaseAgent):
             else:
                 r = f"Unexpected file: {f}\n"
             self.report[f.relative_to(self.parent_dir).as_posix()] = r
-            Path("dumps.md").write_text(self.dumps_report())
+            Path("dumps.md").write_text(self.dumps_report(), encoding="utf-8")
             
     
     def impression(self) -> str:
