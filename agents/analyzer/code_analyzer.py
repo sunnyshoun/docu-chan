@@ -26,13 +26,15 @@ class CodeAnalyzer(BaseAgent):
                 }
             ]
         )
-        
-        return res.content or ""
+        if not res.content:
+            self.log(3, f"find_logics has no content: {target}")
+            return ""
+        return res.content
 
     def find_logics(self, target: FileInfo):
         file_path = target.relative_to(self.parent_dir).as_posix()
         src = target.read_text_line(LINE_READ)
-        res1 = self.chat(
+        res = self.chat(
             [
                 {
                     "role": "system",
@@ -44,8 +46,10 @@ class CodeAnalyzer(BaseAgent):
                 }
             ]
         )
-        
-        return res1.content or ""
+        if not res.content:
+            self.log(3, f"find_logics has no content: {target}")
+            return ""
+        return res.content
 
 if __name__ == "__main__":
     al = CodeAnalyzer(sys.argv[1])

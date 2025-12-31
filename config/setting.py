@@ -37,5 +37,12 @@ AGENT_CONFIGS = {
         api_key=None,
         temperature=0.3,
         num_ctx=4096
+    ),
+    "ProjectAnalyzer":AgentConfig(
+        model="ministral-3:8b",
+        api_url=dotenv.get_key(".env", "CUSTOM_API_URL") or "http://localhost:11434",
+        api_key=None,
+        temperature=0.7,
+        num_ctx=4096
     )
 }
