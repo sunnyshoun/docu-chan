@@ -32,18 +32,24 @@ class AgentConfig:
 
 AGENT_CONFIGS = {
     "CodeAnalyzer":AgentConfig(
-        model="qwen2.5-coder:3b",
-        # model="gemma3:4b",
+        model="qwen2.5-coder:7b",
         api_url=dotenv.get_key(".env", "CUSTOM_API_URL"),
         api_key=None,
         temperature=0.3,
-        num_ctx=4096
+        num_ctx=2048
     ),
-    "ProjectAnalyzer":AgentConfig(
+    "ImageAnalyzer":AgentConfig(
         model="ministral-3:8b",
         api_url=dotenv.get_key(".env", "CUSTOM_API_URL"),
         api_key=None,
+        temperature=0.3,
+        num_ctx=2048
+    ),
+    "ProjectAnalyzer":AgentConfig(
+        model="gemma3:4b",
+        api_url=dotenv.get_key(".env", "CUSTOM_API_URL"),
+        api_key=None,
         temperature=0.7,
-        num_ctx=4096
-    )
+        num_ctx=2048
+    ),
 }

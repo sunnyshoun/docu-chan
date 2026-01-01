@@ -28,10 +28,13 @@ class BaseAgent:
             format=format
         )
         
-        return chat(request, 
+        ret = chat(request, 
             api_url=self.agent_config.api_url,
             api_key=self.agent_config.api_key
         )
+
+        self.log(0, str(ret))
+        return ret
     
     async def async_chat(self, messages: list[dict], tools: list[Callable] = None, format: str = None) -> ChatResponse:
         request = ChatRequest(
@@ -44,10 +47,13 @@ class BaseAgent:
             format=format
         )
         
-        return await async_chat(request, 
+        ret = await async_chat(request, 
             api_url=self.agent_config.api_url,
             api_key=self.agent_config.api_key
         )
+
+        self.log(0, str(ret))
+        return ret
         
     def log(self, level: int, message: str):
         """

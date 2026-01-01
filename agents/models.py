@@ -96,6 +96,9 @@ class ChatResponse(Message):
     eval_count: Optional[int] = None
     'Number of tokens evaluated in inference.'
 
+    def __repr__(self) -> str:
+        return f"model={self.model}, created_at={self.created_at}, prompt_eval_count={self.prompt_eval_count}, eval_count={self.eval_count}"
+
 
 @dataclass
 class ChatRequest:

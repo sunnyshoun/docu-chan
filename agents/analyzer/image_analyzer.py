@@ -1,71 +1,71 @@
 import logging
-from pathlib import Path
 import sys
+from pathlib import Path
 from agents.analyzer.file_node import FileInfo
 from agents.base_agent import BaseAgent
 
-LINE_READ = 100
 
-class CodeAnalyzer(BaseAgent):
+class ImageAnalyzer(BaseAgent):
     parent_dir: Path
     impression: str
 
-    def __init__(self, root_dir: str|Path):
-        super().__init__("CodeAnalyzer")
+    def __init__(self, root_dir: str | Path):
+        super().__init__("ImageAnalyzer")
         _root = Path(root_dir)
         self.parent_dir = _root.parent
 
-    def find_dependencies(self, target: FileInfo)->str:
+    def find_logics(self, image: FileInfo) -> str:
         res = self.chat(
             [
+                {
+                    "role": "system",
+                    "content": (self.prompt_dir/"find_image_logics.md").read_text()
+                },
                 {
                     "role": "user",
                     "content": self.impression
                 },
                 {
-                    "role": "system",
-                    "content": (self.prompt_dir/"find_dependencies.md").read_text()
-                },
-                {
                     "role": "user",
-                    "content": f"Analyze \"{target.relative_to(self.parent_dir).as_posix()}\":\n" + target.read_text_line(LINE_READ)
+                    "content": f"Analyze \"{image.relative_to(self.parent_dir).as_posix()}\"",
+                    "images": [image.read_base64()]
                 }
             ]
         )
         if not res.content:
-            self.log(3, f"find_logics has no content: {target}")
+            self.log(3, f"find_image_logics has no content: {image}")
             return ""
         return res.content
-
-    def find_logics(self, target: FileInfo):
-        file_path = target.relative_to(self.parent_dir).as_posix()
-        src = target.read_text_line(LINE_READ)
+    
+    def find_dependencies(self, image: FileInfo) -> str:
         res = self.chat(
             [
+                {
+                    "role": "system",
+                    "content": (self.prompt_dir/"find_image_dependencies.md").read_text()
+                },
                 {
                     "role": "user",
                     "content": self.impression
                 },
                 {
-                    "role": "system",
-                    "content": (self.prompt_dir/"find_logics.md").read_text()
-                },
-                {
                     "role": "user",
-                    "content": f"Analyze \"{file_path}\":\n{src}"
+                    "content": f"Analyze \"{image.relative_to(self.parent_dir).as_posix()}\"",
+                    "images": [image.read_base64()]
                 }
             ]
         )
         if not res.content:
-            self.log(3, f"find_logics has no content: {target}")
+            self.log(3, f"find_image_dependencies has no content: {image}")
             return ""
         return res.content
-
+    
 if __name__ == "__main__":
     logging.basicConfig(filename='.log', level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
-    al = CodeAnalyzer(sys.argv[1])
+    al = ImageAnalyzer(sys.argv[1])
     al.impression = '# impression\n**Project Overview: FastAPI Template**\n\n**Project Structure & Purpose**\nA **FastAPI-based RESTful API template** with modular architecture for authentication, user management, and service-oriented design. Follows best practices for scalability, separation of concerns, and testing.\n\n---\n### **Key Components**\n1. **Core Framework**\n   - Built with **FastAPI** (primary API layer).\n   - **Modular routing** (separate router files for `users`, `auth`).\n   - **Dependency injection** (centralized in `dependencies.py`).\n   - **Schema validation** (Pydantic models in `schemas/`).\n\n2. **Business Logic & Services**\n   - **Services layer** (`services/`) decouples business logic from routes (e.g., `auth_service.py`, `user_service.py`).\n   - **Database abstraction** (likely async ORM/SQLAlchemy or similar, configured in `database.py`).\n\n3. **Authentication**\n   - JWT-based auth flow (schemas/dependencies in `auth.py`, `schemas/auth.py`).\n   - Token management and user sessions.\n\n4. **Configuration & Logging**\n   - Centralized config in `config.py` (environment variables).\n   - **Structured logging** (`logging_config.py`, middleware for request logging).\n\n5. **Infrastructure**\n   - **Docker support**: `Dockerfile` + `docker-compose.yml` for containerization.\n   - **Testing**: Unit tests (`test_auth.py`, `test_users.py`) with pytest fixtures (`conftest.py`).\n\n6. **Miscellaneous**\n   - Placeholder images (non-functional).\n   - Example env file (`.env.example`) and `.gitignore` for standard exclusions.\n\n---\n### **Observations**\n- **Unconfirmed/Ambiguous**:\n  - No explicit DB ORM (e.g., SQLAlchemy, Tortoise) or async support hints in files.\n  - `123125_1039_dumps.md` content unknown (likely irrelevant metadata).\n- **Missing**:\n  - No API documentation (OpenAPI/Swagger) generation checks in files (assumed auto-generated by FastAPI).\n\n---\n### **Impressions**\n- **Clean, scalable template** for REST APIs with auth.\n- **Modularity**: Clear separation of routes, services, and schemas.\n- **Production-ready**: Logging, Docker, and testing infrastructure in place.\n- **Potential gaps**: DB layer specifics, detailed error handling, and docs need review.'
     c = al.find_dependencies(FileInfo(sys.argv[2]))
     print(c)
     c = al.find_logics(FileInfo(sys.argv[2]))
     print(c)
+    
