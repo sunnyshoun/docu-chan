@@ -3,10 +3,10 @@ import logging
 import sys
 import random
 from pathlib import Path
-from typing import Optional
 from agents.analyzer.code_analyzer import CodeAnalyzer
 from agents.analyzer.file_node import FileInfo
 from agents.analyzer.image_analyzer import ImageAnalyzer
+from agents.analyzer.summarize import Summarize
 from agents.base_agent import BaseAgent
 
 
@@ -15,6 +15,7 @@ class ProjectAnalyzer(BaseAgent):
     file_list: list[FileInfo]
     code_analyzer: CodeAnalyzer
     image_analyzer: ImageAnalyzer
+    summarize: Summarize
     impression: str
     dependency_reports: dict[str, str] = {}
     logic_reports: dict[str, str] = {}
@@ -26,6 +27,7 @@ class ProjectAnalyzer(BaseAgent):
         self.file_list = FileInfo.build_file_list(_root)
         self.code_analyzer = CodeAnalyzer(_root)
         self.image_analyzer = ImageAnalyzer(_root)
+        self.summarize = Summarize(_root)
         self.parent_dir = _root.parent
 
     def dumps_report(self):
@@ -39,60 +41,39 @@ class ProjectAnalyzer(BaseAgent):
             if key in self.logic_reports:
                 d += f"{self.logic_reports[key]}\n"
 
-        Path("dumps.md").write_text(d, encoding="utf-8")
-        Path("file_list.json").write_text(json.dumps([self.impression]+[f.path.as_posix() for f in self.file_list]), encoding="utf-8")
-        Path("dependency_reports.json").write_text(json.dumps(self.dependency_reports), encoding="utf-8")
-        Path("logic_reports.json").write_text(json.dumps(self.logic_reports), encoding="utf-8")
+        (self.log_dir / "dumps.md").write_text(d, encoding="utf-8")
+        (self.log_dir / "file_list.json").write_text(json.dumps([self.impression]+[f.path.as_posix() for f in self.file_list]), encoding="utf-8")
+        (self.log_dir / "dependency_reports.json").write_text(json.dumps(self.dependency_reports), encoding="utf-8")
+        (self.log_dir / "logic_reports.json").write_text(json.dumps(self.logic_reports), encoding="utf-8")
 
     def load(self):
-        file_list = json.loads(Path("file_list.json").read_bytes())
+        file_list = json.loads((self.log_dir / "file_list.json").read_bytes())
         self.impression = file_list[0]
         self.file_list = [FileInfo(f) for f in file_list[1:]]
-        self.dependency_reports = json.loads(Path("dependency_reports.json").read_bytes())
-        self.logic_reports = json.loads(Path("logic_reports.json").read_bytes())
+        self.dependency_reports = json.loads((self.log_dir / "dependency_reports.json").read_bytes())
+        self.logic_reports = json.loads((self.log_dir / "logic_reports.json").read_bytes())
 
     def run(self):
         self.impression = self._pre_analyze()
         self.code_analyzer.impression = self.impression
         self.image_analyzer.impression = self.impression
-        for f in self.file_list:
+        for i, f in enumerate(self.file_list):
+            print(f"{i}/{len(self.file_list)} {f}")
             key = f.relative_to(self.parent_dir).as_posix()
             self.log(2, f"per file report {key}")
-            if f.is_dir:
-                continue
-            elif f.is_image:
+            if f.is_image:
                 self.dependency_reports[key] = self.image_analyzer.find_dependencies(f)
                 self.logic_reports[key] = self.image_analyzer.find_logics(f)
             elif f.is_text:
                 self.dependency_reports[key] = self.code_analyzer.find_dependencies(f)
                 self.logic_reports[key] = self.code_analyzer.find_logics(f)
+            else:
+                print(f"{'='*10}skip{'='*10}\n{f}\n{'='*24}")
         self.dumps_report()
-        random.shuffle(self.file_list)
-        dep = self._analyze_sum(self.dependency_reports)
-        flow = self._analyze_sum(self.logic_reports)
-        Path("dep.md").write_text(dep, encoding="utf-8")
-        Path("flow.md").write_text(flow, encoding="utf-8")
-
-    def _analyze_sum(self, report: dict[str, str]) -> str:
-        sum = ""
-        for f in self.file_list:
-            key = f.relative_to(self.parent_dir).as_posix()
-            self.log(2, f"analyze dependencies {key}")
-            ret = self.chat(
-                [
-                    {
-                        "role": "system",
-                        "content": (Path(self.prompt_dir)/"system_template.md").read_text().format(sum)
-                    },
-                    {
-                        "role": "user",
-                        "content": f"# {key}\n# **report**\n{report[key]}"
-                    }
-                ]
-            )
-            sum = ret.content or ""
-            print(sum)
-        return sum
+        # dep = self.summarize.sum_reports(self.dependency_reports)
+        # flow = self.summarize.sum_reports(self.logic_reports)
+        # Path("dep.md").write_text(dep, encoding="utf-8")
+        # Path("flow.md").write_text(flow, encoding="utf-8")
     
     def _pre_analyze(self) -> str:
         self.log(2, f"pre analyze")

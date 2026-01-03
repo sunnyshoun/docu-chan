@@ -100,7 +100,7 @@ class FileInfo:
     def __repr__(self):
         status = f" [ERR: {self.error}]" if self.error else ""
         type_str = 'Dir' if self.is_dir else 'File'
-        return f"{type_str}: {self.name+status:<30}, type:{self.file_type:<8}({self.confidence:.1f}), {self.is_dir:<1} {self.is_text:<1} {self.is_image:<1}"
+        return f"{type_str}: {self.name+status:<30}, type:{self.file_type:<6}({self.confidence:.1f})"
     
     def relative_to(self, other: str | Path) -> Path:
         return self.path.relative_to(Path(other))
@@ -131,7 +131,8 @@ class FileInfo:
         cls,
         root_path: str | Path, 
         search_hidden: bool = True,
-        chunk_size: int = 400
+        chunk_size: int = 400,
+        black_list: list[str] = ['uv.lock']
     ) -> list['FileInfo']:
         path_obj = Path(root_path)
         if not path_obj.exists():
@@ -141,6 +142,8 @@ class FileInfo:
 
         for p in path_obj.rglob('*'):
             if not search_hidden and p.name.startswith(".") and p.name != ".gitignore":
+                continue
+            if p.name in black_list:
                 continue
             if p.is_relative_to(path_obj/".git"):
                 continue

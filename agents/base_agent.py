@@ -1,19 +1,23 @@
 from pathlib import Path
 from logging import Logger, getLogger, DEBUG, INFO, WARNING, ERROR, CRITICAL
 from typing import Callable
-from config.setting import PROMPT_ROOT, AgentConfig, AGENT_CONFIGS
+from config.setting import LOG_ROOT, PROMPT_ROOT, AgentConfig, AGENT_CONFIGS
 from agents.models import ChatRequest, ChatResponse
 from agents.llm_client import chat, async_chat
 
 class BaseAgent:
     agent_config: AgentConfig
     prompt_dir: Path
+    log_dir: Path
     logger: Logger
     messages = []
     
     def __init__(self, name: str):
         self.name = name
         self.prompt_dir = Path(PROMPT_ROOT) / name
+        self.log_dir = Path(LOG_ROOT) / name
+        if not self.log_dir.exists():
+            self.log_dir.mkdir()
         self.agent_config = AGENT_CONFIGS[name]
         self.logger = getLogger(name)
 
