@@ -16,8 +16,7 @@ class BaseAgent:
         self.name = name
         self.prompt_dir = Path(PROMPT_ROOT) / name
         self.log_dir = Path(LOG_ROOT) / name
-        if not self.log_dir.exists():
-            self.log_dir.mkdir()
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         self.agent_config = AGENT_CONFIGS[name]
         self.logger = getLogger(name)
 

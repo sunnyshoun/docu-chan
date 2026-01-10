@@ -42,9 +42,9 @@ class ProjectAnalyzer(BaseAgent):
                 d += f"{self.logic_reports[key]}\n"
 
         (self.log_dir / "dumps.md").write_text(d, encoding="utf-8")
-        (self.log_dir / "file_list.json").write_text(json.dumps([self.impression]+[f.path.as_posix() for f in self.file_list]), encoding="utf-8")
-        (self.log_dir / "dependency_reports.json").write_text(json.dumps(self.dependency_reports), encoding="utf-8")
-        (self.log_dir / "logic_reports.json").write_text(json.dumps(self.logic_reports), encoding="utf-8")
+        (self.log_dir / "file_list.json").write_text(json.dumps([self.impression]+[f.path.as_posix() for f in self.file_list], indent=2), encoding="utf-8")
+        (self.log_dir / "dependency_reports.json").write_text(json.dumps(self.dependency_reports, indent=2), encoding="utf-8")
+        (self.log_dir / "logic_reports.json").write_text(json.dumps(self.logic_reports, indent=2), encoding="utf-8")
 
     def load(self):
         file_list = json.loads((self.log_dir / "file_list.json").read_bytes())
