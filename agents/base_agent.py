@@ -1,19 +1,22 @@
 from pathlib import Path
 from logging import Logger, getLogger, DEBUG, INFO, WARNING, ERROR, CRITICAL
 from typing import Callable
-from config.setting import PROMPT_ROOT, AgentConfig, AGENT_CONFIGS
+from config.setting import LOG_ROOT, PROMPT_ROOT, AgentConfig, AGENT_CONFIGS
 from agents.models import ChatRequest, ChatResponse
 from agents.llm_client import chat, async_chat
 
 class BaseAgent:
     agent_config: AgentConfig
     prompt_dir: Path
+    log_dir: Path
     logger: Logger
     messages = []
     
     def __init__(self, name: str):
         self.name = name
         self.prompt_dir = Path(PROMPT_ROOT) / name
+        self.log_dir = Path(LOG_ROOT) / name
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         self.agent_config = AGENT_CONFIGS[name]
         self.logger = getLogger(name)
 
@@ -28,10 +31,13 @@ class BaseAgent:
             format=format
         )
         
-        return chat(request, 
+        ret = chat(request, 
             api_url=self.agent_config.api_url,
             api_key=self.agent_config.api_key
         )
+
+        self.log(0, str(ret))
+        return ret
     
     async def async_chat(self, messages: list[dict], tools: list[Callable] = None, format: str = None) -> ChatResponse:
         request = ChatRequest(
@@ -44,12 +50,18 @@ class BaseAgent:
             format=format
         )
         
-        return await async_chat(request, 
+        ret = await async_chat(request, 
             api_url=self.agent_config.api_url,
             api_key=self.agent_config.api_key
         )
+
+        self.log(0, str(ret))
+        return ret
         
     def log(self, level: int, message: str):
+        """
+        level: 1=DEBUG, 2=INFO, 3=WARNING, 4=ERROR, 5=CRITICAL
+        """
         LOG_LEVELS = {
             1: DEBUG,
             2: INFO,
