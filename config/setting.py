@@ -52,4 +52,9 @@ AGENT_CONFIGS = {
         temperature=0.1,
         num_ctx=32000
     ),
+    
+    "DocumentPlanner":AgentConfig(
+        model="devstral-small-2:24b",
+        api_url=dotenv.get_key(".env", "CUSTOM_API_URL") or GLOBAL_API_URL,
+    )
 }
