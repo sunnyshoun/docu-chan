@@ -22,13 +22,14 @@ class ProjectAnalyzer(BaseAgent):
 
     def __init__(self, project_dir: str | Path):
         super().__init__("ProjectAnalyzer")
-        _root = Path(project_dir).absolute()
-        self.log(2, f"current project: {_root.as_posix()}")
-        self.file_list = FileInfo.build_file_list(_root)
-        self.code_analyzer = CodeAnalyzer(_root)
-        self.image_analyzer = ImageAnalyzer(_root)
-        self.summarize = Summarize(_root)
-        self.parent_dir = _root.parent
+        if project_dir:
+            _root = Path(project_dir).absolute()
+            self.log(2, f"current project: {_root.as_posix()}")
+            self.file_list = FileInfo.build_file_list(_root)
+            self.code_analyzer = CodeAnalyzer(_root)
+            self.image_analyzer = ImageAnalyzer(_root)
+            self.summarize = Summarize(_root)
+            self.parent_dir = _root.parent
 
     def dumps_report(self):
         d = "# impression\n"
@@ -47,11 +48,11 @@ class ProjectAnalyzer(BaseAgent):
         (self.log_dir / "logic_reports.json").write_text(json.dumps(self.logic_reports, indent=2), encoding="utf-8")
 
     def load(self):
-        file_list = json.loads((self.log_dir / "file_list.json").read_bytes())
+        file_list = json.loads((self.log_dir / "file_list.json").read_text())
         self.impression = file_list[0]
         self.file_list = [FileInfo(f) for f in file_list[1:]]
-        self.dependency_reports = json.loads((self.log_dir / "dependency_reports.json").read_bytes())
-        self.logic_reports = json.loads((self.log_dir / "logic_reports.json").read_bytes())
+        self.dependency_reports = json.loads((self.log_dir / "dependency_reports.json").read_text())
+        self.logic_reports = json.loads((self.log_dir / "logic_reports.json").read_text())
 
     def run(self):
         self.impression = self._pre_analyze()
